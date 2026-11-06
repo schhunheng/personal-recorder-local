@@ -1,0 +1,3 @@
+-r requirements.txt
+# Optional only. Install compatible CPU torch/torchaudio wheels for your M1 Python environment.
+deepfilternet>=0.5.6,<0.6
