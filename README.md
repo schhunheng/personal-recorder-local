@@ -1,73 +1,112 @@
 # REANCODE101 Studio
 
-A private browser studio for programming lessons. Record a screen, window, or tab with microphone and a separate webcam track; edit framing, pauses, and camera placement; export locally. React 19, strict TypeScript, Vite, Tailwind CSS, shadcn-style Radix Button, Zustand, and Lucide.
+A local recording and automated editing studio for programming lessons on macOS Apple Silicon. React/Vite/TypeScript captures the screen, microphone, and webcam; a loopback FastAPI/FFmpeg service saves originals and prepares a reviewable MP4. No account, cloud upload, or remote AI API is required.
 
-## Run
+**Record → Stop → save originals → clean audio → suggest/remove pauses → compose → review → download MP4.**
 
-Use Node.js 22+ and current desktop Chrome, preferably native Apple Silicon on macOS:
+## Start the complete studio
+
+Use Node.js 22+, Python 3.11+, current desktop Chrome, and FFmpeg/FFprobe:
 
 ```sh
 npm ci
-npm run dev
+python3 -m venv .venv
+.venv/bin/python -m pip install -r backend/requirements.txt
+# Install FFmpeg using its official instructions / your macOS package manager.
+# Confirm both executables are on PATH:
+ffmpeg -version
+ffprobe -version
+npm run dev:all
 ```
 
-Open **http://127.0.0.1:5173**. No Python, FFmpeg executable, Electron, login, API key, or recording backend is required. Keep the origin unchanged to access the same local projects. Deploy the `dist` directory on any static HTTPS host after `npm run build`.
+Open **http://127.0.0.1:5173**. The launcher starts Vite and the local API at **127.0.0.1:8001**. It reads optional settings from `backend/.env`; copy `backend/.env.example` to configure paths/limits/models. Both services bind to loopback. Do not expose this single-user service to the public internet.
 
-macOS may require Chrome permission in **System Settings → Privacy & Security → Screen & System Audio Recording**, **Microphone**, and **Camera**. Restart Chrome if macOS asks. The browser’s screen picker always makes the final source selection. Tab/system audio varies by browser, selected source, and OS; requesting it does not guarantee an audio track.
+For separate terminals, use `npm run dev` and `npm run dev:api`. The latter reads exported environment variables; use `dev:all` for `.env` loading. Basic browser recording/manual editing/native export remain usable with `npm run dev` alone, but automatic FFmpeg editing requires the local service. A static HTTPS deployment can use the browser-only features; media uploads for automatic editing are explicitly blocked outside a localhost origin.
 
-## Find an existing video
+macOS may require Chrome permission in **Privacy & Security → Screen & System Audio Recording**, **Microphone**, and **Camera**. The browser picker makes the final source choice. System/tab audio depends on Chrome, OS, and selected source; requesting it does not guarantee an audio track. Keep the recording tab open and do not sleep the Mac during capture.
 
-Use **All projects → Original** for the source recording, or **Edited videos** for saved exports. The same controls are available through **Original & edited** in the editor. Browser projects are scoped to the exact address and Chrome profile; `http://localhost:5173` and `http://127.0.0.1:5173` are separate libraries. Downloading saves a normal file in the location chosen by your browser.
+## Recording and automatic editing
 
-Files recovered from the previous app are in [Recordings](Recordings/README.md), including its 42-second original and completed processed MP4. Choose **Import video** to add them to the new studio. Old exports deleted by the earlier temporary-output behavior must be exported again unless you already downloaded a copy.
+1. Choose **New recording**. Test the microphone to reveal device names, select the Logitech H390, and test again. Choose screen/window/tab, quality, FPS, and webcam or an uploaded muted looping avatar.
+   Under **Camera & avatar layout**, toggle **Show camera / avatar**, choose a corner, adjust the size, or drag the overlay in the preview. These settings remain available during recording and are remembered for the next lesson. They apply to the whole video; hiding the overlay keeps independently recorded webcam footage available. The editor's **Camera** tab has the same controls, with undo/redo support.
+2. Leave **Automatically edit after recording** enabled and select a preset. Click **Start recording**, choose the source in Chrome, and wait for the countdown.
+3. Record your lesson. Pause/resume with the buttons or Alt+P; stop with the button, Alt+S, or Chrome’s Stop Sharing control. **Important moment**, **Start/End retake**, and **Mark zoom region** record explicit source-time markers. A region marker comes from clicking this app’s preview; global cursor/click events in VS Code are not available.
+4. Stop opens the existing editor. The automatic editor saves immutable originals to this Mac and submits a durable job. Real stage progress arrives through SSE; upload progress measures bytes. A disconnected progress stream reconnects to the same job rather than starting a replacement job.
+5. Review the finished preview and its warnings. Check/uncheck proposed cuts, then **Apply reviewed draft to timeline**. Unchecking restores a section. Undo/redo preserves earlier browser edits. Manual edits made while a job runs are not automatically replaced by its finished draft.
+6. Change zoom, camera/avatar, trim, captions, style, and chapter labels in the editor. **Save timeline on Mac** stores the current EDL through the local API. **Export current timeline to MP4** renders your reviewed edits; **Create automatic draft** reanalyzes pauses.
+7. Download MP4 directly, or return to **All projects → Original / Edited videos**. Outputs remain available after leaving the editor and reloading. Every successful local job keeps its own output; retries do not replace previous results.
 
-## Record and edit
+Keyboard shortcuts: Space plays/pauses the browser preview, S splits, ⌘Z/Ctrl+Z undoes, ⌘⇧Z/Ctrl+Shift+Z redoes. Shortcuts are limited to this tab. After stopping, choose New recording to record another lesson; each capture needs a fresh browser permission picker.
 
-1. Choose **New recording**. Select Window for VS Code, enable your microphone, and click **Test mic** to grant access and reveal input names. Choose the Logitech H390, then test again to hear that device.
-2. Enable webcam if wanted. Choose 720p, 1080p, or 1440p and 30/60 FPS. Capture settings are requests; the selected source determines actual detail and dimensions.
-3. Click **Start recording**, choose your source in Chrome, and wait for the three-second countdown. Pause/resume with the controls or Alt+P. Stop with the control, Alt+S, or Chrome’s Stop Sharing button.
-4. The editor opens with the original recording. Add zoom keyframes at the playhead. Click/drag the preview or use the focus sliders to frame important code. Set 1–3× zoom and a transition duration. Add a 1× keyframe to return to full view.
-5. Use **Camera** to reposition, resize, mirror, hide, or restyle the separately recorded webcam. A muted looping avatar video can replace it. Use **Style** for padding, background, aspect ratio, rounded corners, shadow, watermark, and chapter title intro/outro overlays.
-6. Use **Audio** to compare original/enhanced playback. Local cleanup uses an 85 Hz high-pass filter, an AudioWorklet soft noise gate, and compression, with adjustable strength and voice gain. This is conservative noise reduction, not perfect speech separation. It cannot reliably remove competing voices or loud animals/traffic. Analyze audio first to estimate voice normalization gain.
-7. **Analyze audio & waveform** streams through the recording locally, without decoding the whole lesson into PCM memory. It takes approximately the recording’s duration. Review threshold/minimum-pause suggestions or select reversible automatic removal. Suggested cuts leave 180 ms on each side. Review quiet words before accepting; energy detection is not language-aware transcription.
-8. **Trim** sets source in/out points. Split at the playhead, then remove a section. Undo/redo works for timeline, camera, audio, and visual edits. Original media is preserved.
-9. **Export video** renders the finished composition locally in real time. Choose resolution, frame rate, quality, and a supported format. Download the result and upload it to your LMS yourself.
+## Presets and output profiles
 
-Space plays/pauses the editor, S splits, ⌘Z/Ctrl+Z undoes, and ⌘⇧Z/Ctrl+Shift+Z redoes. Camera placement also supports arrow keys when its preview is focused. Shortcuts apply only to this browser tab.
+| Preset | Behavior |
+| --- | --- |
+| Clean Tutorial | Conservative cleanup, natural pauses, no automatic zoom added |
+| Professional Tutorial | Reversible pause/retake cuts and smooth zooms from explicit Important/Zoom markers, with editable camera layout |
+| Social Media Short | Vertical output, larger captions, and a configurable range around the first Important marker (or the beginning), with optional title/watermark overlays |
 
-## Export capabilities and limits
+Social selection is marker/rule-based, not semantic highlight recognition. It never guesses repeated words or deletes suspected mistakes without explicit retake markers. An unfinished retake marker does not remove footage.
 
-- Runtime detection checks the exact **H.264/AAC MP4** and **VP8/Opus WebM** MediaRecorder MIME strings. MP4 is offered only when Chrome reports that combination. Actual encoder failures remain possible and are shown explicitly.
-- Export uses a canvas and the same renderer as preview, including zoom, camera/avatar, background, title, watermark, cuts, and processed audio. Audio/video follow media playback time. Playback pauses and encoder pauses exclude seek gaps between retained segments.
-- Encoding runs in real time. Keep the tab visible; export stops with an explanation when hidden, rather than silently finishing a throttled render. Do not sleep the computer. 1440p/60 FPS costs substantially more CPU than 1080p/30. Export cannot add source detail.
-- Chunks go to an OPFS writable file, with IndexedDB fallback. Cancellation cleans up temporary output. Output is not uploaded. Completed exports are saved with the project and remain available after leaving the editor or reloading. Use **All projects → Original / Edited videos** to play and download them; several exports can be retained separately.
-- FFmpeg.wasm was evaluated, but its packages/core were unavailable in this environment (npm registry DNS failure). It is **not bundled or presented as a working fallback**. Native WebM is the supported alternative when MP4 is unavailable. The WebCodecs capability is reported; a separate WebCodecs muxing pipeline has not been implemented.
-- The source audio is the microphone/tab mix, including any browser processing enabled during capture. It cannot later be separated into its original inputs.
+- **YouTube/LMS:** 1920×1080, 16:9, 30 FPS by default.
+- **Facebook/TikTok:** 1080×1920, 9:16, 30 FPS by default.
+- H.264 video, AAC audio, high/standard quality, and adjustable maximum bitrate.
+- Vertical output fits the source without stretching it. Use editable zoom regions to make a chosen code area readable. Full desktop text may be too small in vertical framing; review before sharing.
+- Cuts use retained source-time ranges and short audio fades to avoid clicks. No crossfade obscures code.
 
-## Storage, privacy, and recovery
+## Audio and speech detection
 
-Recording chunks are committed individually to IndexedDB every second. Screen and webcam assets are separate from project/edit metadata. This avoids retaining the whole recording in JavaScript memory and preserves committed chunks if capture is interrupted. Projects are marked incomplete until finalized. An interrupted WebM may be only partly playable; recovery is best effort.
+FFmpeg applies adjustable Light/Balanced/Strong FFT denoising, high-pass filtering, optional loudness normalization, and peak limiting. Off disables noise reduction; normalization is a separate control. Original and cleaned WAV previews are available. Cleanup cannot reliably remove all traffic, animals, competing voices, or room echo. Browser echo cancellation is available during capture; post-processing is not a verified dereverberation model.
 
-Exports use OPFS when possible because a sequential file is efficient; original captures intentionally use committed IndexedDB chunks rather than an OPFS writable that would commit only on close. A storage error or excessive pending write backlog stops capture. Already saved chunks remain in the recovery library; the final failed chunk may be lost.
+The optional DeepFilterNet adapter is reused from the previous backend. Unavailable/failed AI enhancement falls back to Balanced FFmpeg with an explicit warning. No model is downloaded at processing time.
 
-Settings shows estimated storage usage/quota, browser capabilities, and persistent-storage status. Storage can still be cleared by the user, private browsing, or browser policy. Download originals and project metadata after important lessons. Keep this tab open while recording. Closing, reloading, device loss, or capture-session termination may interrupt the recording.
+Silero VAD is used when its local package/model is installed. Without it, **Auto** uses labeled energy-based suggestions. Explicit Silero mode fails clearly if unavailable. Defaults detect gaps longer than 1.5 seconds and retain approximately 0.3 seconds around speech. Quiet Khmer syllables and useful coding pauses require review; these are reversible proposals, not guaranteed mistake detection. A fully quiet recording is never automatically cut to an empty file.
 
-Projects can be opened, renamed, duplicated, deleted, and restored by reopening the same origin. Original recordings and finished exports have separate playback/download controls. Editing a project saves editing instructions; use Export video to create the finished video file. Duplicates share immutable source assets; deleting one retains media used by another. Project metadata JSON is an edit/reference backup and **does not contain media**. There is no remote upload or content analytics in the active application.
+## Optional offline Khmer/English captions
 
-## Validation
+```sh
+.venv/bin/python -m pip install -r backend/requirements-models.txt
+```
+
+This optional group adds Silero/PyTorch and faster-whisper/CTranslate2; it can use substantially more disk and memory than the core editor. Obtain a compatible **multilingual CTranslate2 Whisper model directory** using the [upstream faster-whisper instructions](https://github.com/SYSTRAN/faster-whisper), then set:
+
+```sh
+STUDIO_WHISPER_MODEL=/absolute/path/to/local/model-directory
+```
+
+Use `backend/.env` with the combined launcher or export the variable for `dev:api`. The directory must contain `model.bin` and the model’s supporting files. Runtime transcription uses `local_files_only=True` and CPU int8. It does not fetch weights. Khmer (`km`), English (`en`), and automatic language selection are offered only when the installed local model is available.
+
+Captions appear as editable text/timestamps; SRT import/export works without any model. SRT times are remapped around accepted cuts. Caption-derived chapter labels are narration excerpts for review, not generated summaries. Chapter metadata is remapped and embedded in MP4 when provided.
+
+**Text rendering is capability-dependent.** FFmpeg builds with the `subtitles`/libass filter can burn captions/titles with font, size, position, and gentle fade settings. The current installed FFmpeg lacks that filter. Its MP4 exports therefore display an explicit warning when text overlays were requested and offer SRT; the browser Canvas exporter can include text overlays where its codec APIs permit. Correct Khmer font shaping/availability and actual offline transcription quality remain unverified here. No automatic background-removal feature is claimed.
+
+## Where your files live
+
+- **During capture:** original screen, independent microphone (where an audio recorder is supported), and webcam chunks are committed to IndexedDB every second. Timing offsets, pause periods, markers, and edits are stored separately.
+- **After automatic finalization:** immutable files are under `backend/data/studio/<project-id>/original-*`. SQLite jobs/timeline state live in `backend/data/studio/jobs.sqlite3`.
+- **Processing and finished videos:** `backend/data/studio/jobs/<job-id>/` retains extracted/cleaned audio, JSON EDL, SRT/chapters, intermediate segments, and `edited.mp4`. No automatic expiry deletes originals or old outputs.
+- **Browser library:** All projects offers separate original/edited playback and downloads. Local-service media streams directly from localhost where possible. Projects saved on this Mac can be restored into a different browser origin/profile through the dashboard’s recovery panel.
+- **Normal downloaded files:** your browser’s chosen download folder.
+- **Earlier recovered recordings:** see [Recordings](Recordings/README.md). Use Import video to open them in the new studio.
+
+`localhost:5173` and `127.0.0.1:5173` have separate browser libraries. Browser storage may be evicted or cleared; download important originals and results. Backend files remain until explicitly deleted. Deleting a browser project does not silently delete the canonical local-service originals. The local API has an explicit project-deletion endpoint which refuses active jobs.
+
+## Verification
 
 ```sh
 npm run build
 npm test
+npm run test:api
 npm run test:browser
 ```
 
-`npm test` checks timeline math, smooth/bounded zoom, source fitting, compositor parameters, silence padding, capture lifecycle, separate sources, pause timing, permission retry, picker cancellation, Stop Sharing, and quota failure. Mocked lifecycle tests do not prove actual browser encoding.
+Current evidence:
 
-`test:browser` uses real Chrome MediaRecorder, Web Audio, Canvas, IndexedDB, and OPFS with deterministic generated device fixtures. It checks recording, preview, local export, decoded export pixels, original persistence, and responsive layout. It launches its own Chrome; set `CHROME_PATH` if necessary. It routes the built app internally and requires no development server.
+- Strict TypeScript/Vite build and browser logic tests pass.
+- Real FastAPI/FFmpeg tests cover independent camera composition, padded silence removal/restoration, actual H.264/AAC codecs, A/V duration, output retention across retries/restarts, vertical output, SRT, SSE, optional-AI fallback, timeline conflicts, and immutable originals.
+- Your recovered 42-second lesson was processed into [a real 1080p MP4](Recordings/automatic-clean-tutorial-optimized.mp4). Its original checksum is unchanged. The optimized run took 13.68 seconds in this environment; it found no qualifying pauses, so it did not invent cuts. This single sample is not a general performance/quality guarantee.
+- [Sample verification report](Recordings/automatic-clean-tutorial-optimized.verification.json) includes settings, EDL, codecs/duration checks, warnings, hashes, and measured runtime.
+- Automated Chrome launch and localhost server binding remain blocked by this execution sandbox. The connected browser workflow, H390/webcam hardware sync, a real 30-minute recording, model quality, and full visual QA still require validation outside it.
+- Silero/faster-whisper model installation was attempted but could not resolve distributions in this environment. They are not installed or presented as verified AI features.
 
-**Current verification:** TypeScript and production build passed; 13 unit/lifecycle tests passed. The real browser suite could not execute because the session sandbox aborts Chrome launch (`SIGABRT` / `EPERM`). Local server binding also fails with `EPERM`. Real H390/VS Code capture, actual MP4/WebM output, visual browser QA, audio synchronization, and the required 30-minute recording/performance acceptance test remain **unverified**. This is not a production-readiness claim. See [validation](docs/VALIDATION.md).
-
-## Architecture
-
-See [architecture](docs/ARCHITECTURE.md) for module boundaries and media decisions. The active entry point is `src/main.tsx → src/studio/App.tsx`. Previous Python/Electron implementations remain as inactive reference files in `backend/`, `electron/`, `src/edu/`, `src/legacy-main.tsx`, and legacy documentation. None are imported by the current app, required by current npm scripts, or included in the browser production bundle.
+See [architecture](docs/ARCHITECTURE.md), [automation plan](docs/AUTOMATION_PLAN.md), and [validation gates](docs/VALIDATION.md). This is an implemented, tested local processing engine with pending browser/hardware/model acceptance—not a claim that all phases are production verified.

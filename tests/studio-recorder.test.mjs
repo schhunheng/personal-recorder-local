@@ -24,7 +24,7 @@ const recorderURL = url(
     .replace("'./capabilities'", JSON.stringify(caps))
 );
 const { StudioRecorder } = await import(recorderURL),
-  { defaultRecording } = await import(model);
+  { defaultRecording, defaultCamera } = await import(model);
 const originalTimer = globalThis.setTimeout;
 class Track {
   readyState = 'live';
@@ -114,8 +114,8 @@ function setup() {
           allTracks.push(t);
           return new Stream([t]);
         },
-        getUserMedia: async () => {
-          const t = new Track('video');
+        getUserMedia: async (options) => {
+          const t = new Track(options.audio ? 'audio' : 'video');
           allTracks.push(t);
           return new Stream([t]);
         },
@@ -124,6 +124,29 @@ function setup() {
   });
   globalThis.MediaStream = Stream;
   globalThis.MediaRecorder = Recorder;
+  Recorder.isTypeSupported = () => true;
+  globalThis.AudioContext = class {
+    sampleRate = 48000;
+    async resume() {}
+    async close() {}
+    createGain() {
+      return { connect() {} };
+    }
+    createMediaStreamSource() {
+      return { connect() {} };
+    }
+    createMediaStreamDestination() {
+      return { stream: new Stream([new Track('audio')]) };
+    }
+    createAnalyser() {
+      return {
+        fftSize: 1024,
+        getFloatTimeDomainData(data) {
+          data.fill(0);
+        },
+      };
+    }
+  };
   globalThis.setTimeout = (fn, ms, ...args) =>
     ms === 1000
       ? originalTimer(fn, 0, ...args)
@@ -213,4 +236,63 @@ test('permission denial leaves the recorder retryable', async () => {
   now = 1000;
   await r.stop();
   assert.equal(r.state, 'idle');
+});
+
+test('microphone originals and explicit markers retain a shared pause-aware timeline', async () => {
+  setup();
+  let saved;
+  r.onSaved = (p) => (saved = p);
+  await r.start({ ...defaultRecording, mic: true, camera: true });
+  assert.equal(Recorder.all.length, 3);
+  assert.notEqual(
+    Recorder.all[0].stream.getAudioTracks()[0],
+    Recorder.all[2].stream.getAudioTracks()[0]
+  );
+  now = 1000;
+  r.mark('important', 0.7, 0.4);
+  now = 2000;
+  r.mark('retake_start');
+  now = 5000;
+  r.pause();
+  now = 15000;
+  r.mark('retake_end');
+  r.resume();
+  now = 17000;
+  await r.stop();
+  assert.equal(saved.duration, 7);
+  assert.ok(saved.microphone.bytes > 0);
+  assert.equal(saved.markers[2].time, 5);
+  assert.deepEqual(saved.timing.pauses, [{ start: 5, end: 15 }]);
+  assert.deepEqual(Object.keys(saved.timing.trackOffsetsMs), [
+    saved.screen.id,
+    saved.camera.id,
+    saved.microphone.id,
+  ]);
+});
+test('overlay settings survive finalization while hidden webcam originals keep recording', async () => {
+  setup();
+  let saved;
+  r.onSaved = (p) => (saved = p);
+  const layout = {
+    ...defaultCamera,
+    visible: false,
+    x: 0.15,
+    y: 0.2,
+    size: 0.3,
+  };
+  r.setOverlay(layout);
+  await r.start({ ...defaultRecording, mic: false, camera: true });
+  assert.deepEqual(saves[0].edits.camera, layout);
+  assert.equal(Recorder.all.length, 2);
+  assert.equal(Recorder.all[1].state, 'recording');
+  assert.ok(r.camera.getTracks().every((t) => t.readyState === 'live'));
+  r.setOverlay({ ...layout, visible: true, x: 0.8 });
+  Recorder.all[1].emit();
+  await flush();
+  assert.equal(saves.at(-1).edits.camera.x, 0.8);
+  now = 4000;
+  await r.stop();
+  assert.deepEqual(saved.edits.camera, { ...layout, visible: true, x: 0.8 });
+  assert.ok(saved.camera.bytes > 0);
+  assert.equal(layout.visible, false);
 });

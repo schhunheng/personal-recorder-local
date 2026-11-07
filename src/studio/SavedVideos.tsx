@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Download, Film, Pencil, Video, X } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { bytes, formatTime, type Project, type SavedExport } from './model';
-import { assetBlob, listExports } from './storage';
+import { assetBlob, listExports, localMediaURL } from './storage';
 import { useDialog } from './useDialog';
 export function SavedVideos({
   project,
@@ -52,6 +52,7 @@ export function SavedVideos({
     setUrl('');
     setError('');
     setLoading(!!asset);
+    try { if (asset && localMediaURL(asset)) { setUrl(localMediaURL(asset)!); setLoading(false); return; } } catch(error) { setError((error as Error).message); setLoading(false); return; }
     if (asset)
       void assetBlob(asset)
         .then((blob) => {

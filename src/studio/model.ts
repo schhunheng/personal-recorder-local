@@ -19,6 +19,9 @@ export type Camera = {
   shadow: boolean;
 };
 export type Edits = {
+  captions?: Caption[];
+  captionStyle?: CaptionStyle;
+  chapters?: { time: number; title: string }[];
   waveform?: { levels: number[]; step: number };
   trim: Range;
   cuts: Range[];
@@ -50,7 +53,8 @@ export type Asset = {
   id: string;
   mime: string;
   bytes: number;
-  storage: 'opfs' | 'idb';
+  storage: 'opfs' | 'idb' | 'local-api';
+  url?: string;
 };
 export type SavedExport = {
   id: string;
@@ -60,6 +64,28 @@ export type SavedExport = {
   duration: number;
   asset: Asset;
   edits: Edits;
+};
+export type RecordingMarker = {
+  id: string;
+  time: number;
+  kind: 'important' | 'zoom' | 'retake_start' | 'retake_end' | 'chapter';
+  label?: string;
+  x?: number;
+  y?: number;
+};
+export type Caption = Range & { id: string; text: string };
+export type CaptionStyle = {
+  font:
+    | 'Arial'
+    | 'Noto Sans Khmer'
+    | 'Khmer OS'
+    | 'Kohinoor Khmer'
+    | 'Khmer MN'
+    | 'Khmer Sangam MN';
+  size: number;
+  position: 'bottom' | 'top' | 'center';
+  animation: 'none' | 'fade';
+  burn: boolean;
 };
 export type Project = {
   id: string;
@@ -71,6 +97,21 @@ export type Project = {
   complete: boolean;
   screen: Asset;
   camera?: Asset;
+  microphone?: Asset;
+  markers?: RecordingMarker[];
+  timing?: {
+    startedAt: number;
+    trackOffsetsMs: Record<string, number>;
+    pauses: { start: number; end?: number }[];
+    sampleRate?: number;
+  };
+  processing?: {
+    requested?: boolean;
+    timelineVersion?: number;
+    jobId?: string;
+    appliedJobId?: string;
+    error?: string;
+  };
   edits: Edits;
   warning?: string;
 };
@@ -100,6 +141,17 @@ export const defaultRecording: RecordingOptions = {
   height: 1080,
   fps: 30,
 };
+export const defaultCamera: Camera = {
+  visible: true,
+  shape: 'circle',
+  size: 0.22,
+  x: 0.84,
+  y: 0.78,
+  mirror: true,
+  opacity: 1,
+  border: true,
+  shadow: true,
+};
 export function defaultEdits(duration: number): Edits {
   return {
     trim: { start: 0, end: duration },
@@ -107,17 +159,7 @@ export function defaultEdits(duration: number): Edits {
     splits: [],
     zooms: [],
     silence: [],
-    camera: {
-      visible: true,
-      shape: 'circle',
-      size: 0.22,
-      x: 0.84,
-      y: 0.78,
-      mirror: true,
-      opacity: 1,
-      border: true,
-      shadow: true,
-    },
+    camera: { ...defaultCamera },
     audio: { enabled: false, strength: 0.5, gain: 1 },
     appearance: {
       background: '#182b29',

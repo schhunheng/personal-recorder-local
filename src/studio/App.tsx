@@ -42,14 +42,21 @@ import {
   importAsset,
   listProjects,
   listExports,
+  localMediaURL,
   saveProject,
 } from './storage';
 import { loadVideo, unloadVideo } from './media';
 import { useEditor, usePreferences } from './store';
 import Recording from './Recording';
 import { SavedVideos } from './SavedVideos';
+import {
+  localRequest,
+  restoreLocalProject,
+  type LocalProject,
+} from './pipeline';
 import Editor from './Editor';
 import { capabilities } from './capabilities';
+import { useMediaPlayback } from './useMediaPlayback';
 import { useDialog } from './useDialog';
 import { Field, Toggle, Slider } from './controls';
 function Thumbnail({ project }: { project: Project }) {
@@ -60,7 +67,9 @@ function Thumbnail({ project }: { project: Project }) {
       url = '',
       video: HTMLVideoElement | undefined;
     void (async () => {
-      url = URL.createObjectURL(await assetBlob(project.screen));
+      url =
+        localMediaURL(project.screen) ||
+        URL.createObjectURL(await assetBlob(project.screen));
       video = await loadVideo(url);
       if (!gone && ref.current) {
         const c = ref.current,
@@ -98,10 +107,12 @@ function Thumbnail({ project }: { project: Project }) {
   );
 }
 export default function App() {
+  useMediaPlayback();
   const [page, setPage] = useState<
       'dashboard' | 'record' | 'editor' | 'settings'
     >('dashboard'),
     [projects, setProjects] = useState<Project[]>([]),
+    [localProjects, setLocalProjects] = useState<LocalProject[]>([]),
     [exports, setExports] = useState<SavedExport[]>([]),
     [videos, setVideos] = useState<{
       project: Project;
@@ -123,6 +134,9 @@ export default function App() {
   const [captureBusy, setCaptureBusy] = useState(false);
   const caps = capabilities();
   const refresh = () => {
+    void localRequest<LocalProject[]>('/projects')
+      .then(setLocalProjects)
+      .catch(() => {});
     void Promise.all([listProjects(), listExports()])
       .then(([projects, exports]) => {
         setProjects(projects);
@@ -140,6 +154,32 @@ export default function App() {
   function openProject(p: Project) {
     open(p);
     setPage('editor');
+  }
+  const restorable = localProjects.filter(
+    (p) => p.assets.screen && !projects.some((current) => current.id === p.id)
+  );
+  async function restoreRecording(p: LocalProject) {
+    try {
+      const project = await restoreLocalProject(p);
+      await saveProject(project);
+      refresh();
+      openProject(project);
+    } catch (error) {
+      setError((error as Error).message);
+    }
+  }
+  async function recordingSaved(p: Project) {
+    const next = {
+      ...p,
+      processing: { requested: preferences.automation.enabled && p.complete },
+    };
+    try {
+      await saveProject(next);
+      openProject(next);
+    } catch (e) {
+      setError((e as Error).message);
+      openProject(p);
+    }
   }
   async function importRecording(file?: File) {
     if (!file) return;
@@ -257,7 +297,7 @@ export default function App() {
               Your device.
             </strong>
             <p>
-              No uploads. No accounts.
+              No cloud uploads. No accounts.
               <br />
               Just you and your next idea.
             </p>
@@ -305,7 +345,7 @@ export default function App() {
           <Recording
             onBusy={setCaptureBusy}
             onBack={() => setPage('dashboard')}
-            onSaved={openProject}
+            onSaved={recordingSaved}
           />
         ) : page === 'editor' && current ? (
           <Editor
@@ -579,6 +619,35 @@ export default function App() {
                 </div>
               </div>
             </section>
+            {!!restorable.length && (
+              <section className="local-recovery-panel">
+                <h2>
+                  <HardDrive size={18} /> Recordings saved on this Mac
+                </h2>
+                <p>
+                  These originals are safe in the local studio workspace.
+                  Restore them to this browser to edit or download.
+                </p>
+                {restorable.map((p) => (
+                  <div key={p.id}>
+                    <span>
+                      {p.title}
+                      <small>
+                        {formatTime(p.duration)} ·{' '}
+                        {new Date(p.created * 1000).toLocaleDateString()}
+                      </small>
+                    </span>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => void restoreRecording(p)}
+                    >
+                      Restore project
+                    </Button>
+                  </div>
+                ))}
+              </section>
+            )}
             <section className="projects-section">
               <div className="projects-heading">
                 <h2>
@@ -836,7 +905,8 @@ export default function App() {
             <h2 id="delete-title">Delete this project?</h2>
             <p>
               “{confirmDelete.title}” and any media used only by this project
-              will be removed from this browser.
+              will be removed from this browser. Files already saved to the
+              local studio service remain on this Mac and can be restored.
             </p>
             <div className="two-fields">
               <Button

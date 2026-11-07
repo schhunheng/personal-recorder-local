@@ -13,6 +13,8 @@ from starlette.concurrency import run_in_threadpool
 from .audio import ai_status
 from .config import Config
 from .jobs import Jobs, ACTIVE
+from .studio_jobs import StudioJobs
+from .studio_api import router as studio_router
 
 
 class Options(BaseModel):
@@ -22,10 +24,13 @@ class Options(BaseModel):
 
 def create_app(config: Config | None = None):
     config = config or Config()
+    # The studio retains original media until explicit deletion, including legacy files.
+    config.retention_days = 0
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.jobs = Jobs(config)
+        app.state.studio = StudioJobs(config)
         async def expiry():
             while True:
                 await asyncio.sleep(3600)
@@ -36,10 +41,12 @@ def create_app(config: Config | None = None):
         with suppress(asyncio.CancelledError):
             await task
         await run_in_threadpool(app.state.jobs.close)
+        await run_in_threadpool(app.state.studio.close)
 
-    app = FastAPI(title='EduRecorder local API', lifespan=lifespan)
+    app = FastAPI(title='REANCODE101 local studio', lifespan=lifespan)
+    app.include_router(studio_router)
     app.add_middleware(CORSMiddleware, allow_origins=['http://localhost:5173', 'http://127.0.0.1:5173'],
-                       allow_methods=['GET', 'POST', 'DELETE'], allow_headers=['Content-Type'])
+                       allow_methods=['GET', 'POST', 'PUT', 'DELETE'], allow_headers=['Content-Type'])
 
     @app.middleware('http')
     async def local_only(request: Request, call_next):

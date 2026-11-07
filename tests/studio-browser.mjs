@@ -112,7 +112,20 @@ try {
       return dest.stream;
     };
   });
-  await page.getByRole('switch', { name: /^Webcam/ }).check();
+  await page.getByRole('switch', { name: /^Record webcam/ }).check();
+  await page.getByRole('button', { name: 'Top left', exact: true }).click();
+  await page.getByRole('slider', { name: /^Overlay size/ }).fill('26');
+  const showOverlay = page.getByRole('switch', {
+    name: /^Show camera \/ avatar/,
+  });
+  const overlay = page.getByRole('group', {
+    name: 'Camera overlay. Drag to reposition.',
+    exact: true,
+  });
+  await overlay.waitFor();
+  await showOverlay.uncheck();
+  assert.equal(await overlay.count(), 0);
+  await showOverlay.check();
   await page
     .getByRole('button', { name: 'Start recording', exact: true })
     .click();
@@ -126,6 +139,15 @@ try {
   await page
     .getByRole('button', { name: 'Pause', exact: true })
     .waitFor({ timeout: 15000 });
+  await showOverlay.uncheck();
+  assert.equal(await overlay.count(), 0);
+  assert.ok(
+    await page.evaluate(() =>
+      window.fixtureTracks.every((t) => t.readyState === 'live')
+    )
+  );
+  await showOverlay.check();
+  await page.getByRole('button', { name: 'Bottom left', exact: true }).click();
   await page.waitForTimeout(2000);
   await page.getByRole('button', { name: 'Pause', exact: true }).click();
   await page.waitForTimeout(400);
@@ -141,6 +163,19 @@ try {
     )
   );
   await page.getByLabel('Project title').fill('Python · integration fixture');
+  await page.getByRole('button', { name: 'Camera', exact: true }).click();
+  assert.equal(
+    await page
+      .getByRole('button', { name: 'Bottom left', exact: true })
+      .getAttribute('aria-pressed'),
+    'true'
+  );
+  assert.equal(
+    await page.getByRole('slider', { name: /^Overlay size/ }).inputValue(),
+    '26'
+  );
+  await page.getByRole('button', { name: 'Bottom right', exact: true }).click();
+  await page.getByRole('button', { name: 'Zoom', exact: true }).click();
   await page.getByRole('button', { name: /^Add zoom at/ }).click();
   await page.getByRole('slider', { name: /^Zoom level/ }).fill('2');
   await page.getByRole('slider', { name: /^Focus X/ }).fill('0.75');
@@ -194,9 +229,9 @@ try {
         r.onsuccess = () => resolve(r.result);
       });
     const projects = await getAll('projects'),
-      assets = await getAll('assets');
+      savedExports = await getAll('exports');
     const p = projects[0],
-      asset = assets.find((a) => a.id !== p.screen.id && a.id !== p.camera.id);
+      asset = savedExports.sort((a, b) => b.created - a.created)[0].asset;
     let blob;
     if (asset.storage === 'opfs') {
       const root = await navigator.storage.getDirectory(),
@@ -227,7 +262,12 @@ try {
     ctx.drawImage(v, 0, 0);
     const center = [...ctx.getImageData(c.width / 2, c.height / 2, 1, 1).data],
       camera = [
-        ...ctx.getImageData(c.width * 0.84, c.height * 0.78, 1, 1).data,
+        ...ctx.getImageData(
+          c.width * p.edits.camera.x,
+          c.height * p.edits.camera.y,
+          1,
+          1
+        ).data,
       ];
     const header = new TextDecoder().decode(
       await blob.slice(4, 8).arrayBuffer()

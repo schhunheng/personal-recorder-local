@@ -13,6 +13,10 @@ import {
   ArrowLeft,
   AudioLines,
   Check,
+  Flag,
+  RotateCcw,
+  ZoomIn,
+  Upload,
   X,
 } from 'lucide-react';
 import { StudioRecorder, type CaptureState } from './recorder';
@@ -21,6 +25,10 @@ import { formatTime } from './model';
 import { usePreferences } from './store';
 import { capabilities, mediaError } from './capabilities';
 import { Toggle, Field } from './controls';
+import { assetBlob, getAsset, importAsset, localMediaURL } from './storage';
+import { loadVideo, unloadVideo } from './media';
+import { CameraSettings } from './CameraSettings';
+import { CameraOverlayPreview } from './CameraOverlayPreview';
 import { Button } from '../components/ui/button';
 export default function Recording({
   onBack,
@@ -33,9 +41,18 @@ export default function Recording({
 }) {
   const options = usePreferences((s) => s.recording),
     update = usePreferences((s) => s.setRecording);
+  const savedCallback = useRef(onSaved);
+  savedCallback.current = onSaved;
   const recorder = useRef(new StudioRecorder()),
-    screen = useRef<HTMLVideoElement>(null),
-    webcam = useRef<HTMLVideoElement>(null);
+    screen = useRef<HTMLVideoElement>(null);
+  const [cameraStream, setCameraStream] = useState<MediaStream>();
+  const overlay = usePreferences((s) => s.overlay),
+    setOverlay = usePreferences((s) => s.setOverlay);
+  const latestOverlay = useRef(overlay);
+  latestOverlay.current = overlay;
+  useEffect(() => {
+    recorder.current.setOverlay(overlay);
+  }, [overlay]);
   const [state, setState] = useState<CaptureState>('idle'),
     [devices, setDevices] = useState<MediaDeviceInfo[]>([]),
     [error, setError] = useState(''),
@@ -43,28 +60,68 @@ export default function Recording({
     [count, setCount] = useState(3),
     [time, setTime] = useState(0),
     [test, setTest] = useState(false),
-    [testUrl, setTestUrl] = useState('');
+    [testUrl, setTestUrl] = useState(''),
+    [retake, setRetake] = useState(false),
+    [markerNotice, setMarkerNotice] = useState(''),
+    [pickRegion, setPickRegion] = useState(false);
   const testStop = useRef<(() => void) | undefined>(undefined);
+  const automation = usePreferences((s) => s.automation),
+    setAutomation = usePreferences((s) => s.setAutomation);
+  const avatarId = usePreferences((s) => s.avatarId),
+    setAvatarId = usePreferences((s) => s.setAvatarId);
+  const [avatarUrl, setAvatarUrl] = useState('');
+  const selectedAvatar = useRef<string | undefined>(undefined);
+  selectedAvatar.current = avatarId;
+  useEffect(() => {
+    let active = true,
+      url = '';
+    setAvatarUrl('');
+    if (avatarId)
+      void getAsset(avatarId)
+        .then(async (asset) => {
+          if (!asset)
+            throw Error(
+              'Import the avatar video again; its browser copy is unavailable.'
+            );
+          url =
+            localMediaURL(asset) || URL.createObjectURL(await assetBlob(asset));
+          if (active) setAvatarUrl(url);
+          else URL.revokeObjectURL(url);
+        })
+        .catch((error) => {
+          if (active) setError(error.message);
+        });
+    return () => {
+      active = false;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [avatarId]);
   const caps = capabilities();
   useEffect(() => {
     const r = recorder.current;
     r.onState = (state) => {
       setState(state);
+      if (state === 'idle') setCameraStream(undefined);
       onBusy(state !== 'idle');
     };
     r.onError = setError;
     r.onLevel = setLevel;
     r.onCountdown = setCount;
-    r.onSaved = onSaved;
+    r.onSaved = (p) =>
+      savedCallback.current({
+        ...p,
+        edits: {
+          ...p.edits,
+          avatar: selectedAvatar.current,
+          camera: { ...latestOverlay.current },
+        },
+      });
     r.onReady = () => {
       if (screen.current) {
         screen.current.srcObject = r.screen!;
         void screen.current.play();
       }
-      if (webcam.current && r.camera) {
-        webcam.current.srcObject = r.camera;
-        void webcam.current.play();
-      }
+      setCameraStream(r.camera);
     };
     const refresh = () => {
       void navigator.mediaDevices
@@ -304,10 +361,13 @@ export default function Recording({
               <Camera size={16} />
             </div>
             <Toggle
-              label="Webcam"
+              label="Record webcam"
               description="Recorded separately. Adjust it later in the editor."
               checked={options.camera}
-              onChange={(camera) => update({ camera })}
+              onChange={(camera) => {
+                update({ camera });
+                if (camera) setAvatarId(undefined);
+              }}
             />
             {options.camera && (
               <Field label="Camera device">
@@ -325,6 +385,46 @@ export default function Recording({
                     ))}
                 </select>
               </Field>
+            )}
+            <label className="upload-label">
+              <Upload size={14} />{' '}
+              {avatarId
+                ? 'Replace looping avatar'
+                : 'Use a looping video avatar'}
+              <input
+                hidden
+                type="file"
+                accept="video/mp4,video/webm,video/quicktime"
+                onChange={async (event) => {
+                  const file = event.target.files?.[0];
+                  if (!file) return;
+                  let url = '',
+                    video: HTMLVideoElement | undefined;
+                  try {
+                    if (!file.type.startsWith('video/'))
+                      throw Error('Choose a video file.');
+                    url = URL.createObjectURL(file);
+                    video = await loadVideo(url);
+                    const asset = await importAsset(file);
+                    setAvatarId(asset.id);
+                    update({ camera: false });
+                  } catch (error) {
+                    setError((error as Error).message);
+                  } finally {
+                    unloadVideo(video);
+                    if (url) URL.revokeObjectURL(url);
+                    event.target.value = '';
+                  }
+                }}
+              />
+            </label>
+            {avatarId && (
+              <button
+                className="danger-link"
+                onClick={() => setAvatarId(undefined)}
+              >
+                Remove avatar
+              </button>
             )}
             <div className="two-fields">
               <Field label="Capture quality">
@@ -348,6 +448,19 @@ export default function Recording({
               </Field>
             </div>
           </fieldset>
+          <section
+            className="recording-layout-settings"
+            aria-label="Camera and avatar settings"
+          >
+            <h2>Camera & avatar layout</h2>
+            {!options.camera && !avatarId && (
+              <p className="inspector-footnote">
+                Turn on Record webcam or upload an avatar to preview this
+                layout.
+              </p>
+            )}
+            <CameraSettings camera={overlay} onChange={setOverlay} recording />
+          </section>
         </section>
         <section className="setup-monitor">
           <div className="monitor-bar">
@@ -372,13 +485,67 @@ export default function Recording({
               <ShieldCheck size={12} /> Only on this device
             </span>
           </div>
-          <div className="capture-preview">
-            <video ref={screen} muted playsInline />
+          <div className="capture-preview" style={{ aspectRatio: 16 / 9 }}>
             <video
-              ref={webcam}
+              ref={screen}
               muted
               playsInline
-              className={options.camera && busy ? 'capture-webcam' : 'hidden'}
+              onClick={(event) => {
+                if (!pickRegion) return;
+                const r = event.currentTarget.getBoundingClientRect();
+                recorder.current.mark(
+                  'zoom',
+                  Math.max(
+                    0,
+                    Math.min(
+                      1,
+                      (event.clientX -
+                        r.left -
+                        (r.width -
+                          event.currentTarget.videoWidth *
+                            Math.min(
+                              r.width / event.currentTarget.videoWidth,
+                              r.height / event.currentTarget.videoHeight
+                            )) /
+                          2) /
+                        (event.currentTarget.videoWidth *
+                          Math.min(
+                            r.width / event.currentTarget.videoWidth,
+                            r.height / event.currentTarget.videoHeight
+                          ))
+                    )
+                  ),
+                  Math.max(
+                    0,
+                    Math.min(
+                      1,
+                      (event.clientY -
+                        r.top -
+                        (r.height -
+                          event.currentTarget.videoHeight *
+                            Math.min(
+                              r.width / event.currentTarget.videoWidth,
+                              r.height / event.currentTarget.videoHeight
+                            )) /
+                          2) /
+                        (event.currentTarget.videoHeight *
+                          Math.min(
+                            r.width / event.currentTarget.videoWidth,
+                            r.height / event.currentTarget.videoHeight
+                          ))
+                    )
+                  )
+                );
+                setPickRegion(false);
+                setMarkerNotice(`Zoom region marked at ${formatTime(time)}`);
+              }}
+            />
+            <CameraOverlayPreview
+              camera={overlay}
+              stream={cameraStream}
+              avatarUrl={avatarUrl}
+              enabled={options.camera || !!avatarId}
+              onChange={setOverlay}
             />
             {!busy && (
               <div className="capture-empty">
@@ -401,6 +568,44 @@ export default function Recording({
               </div>
             )}
           </div>
+          {(state === 'recording' || state === 'paused') && (
+            <div className="record-markers">
+              <button
+                onClick={() => {
+                  recorder.current.mark('important');
+                  setMarkerNotice(`Important moment at ${formatTime(time)}`);
+                }}
+              >
+                <Flag size={14} /> Important moment
+              </button>
+              <button
+                className={retake ? 'retake-active' : ''}
+                onClick={() => {
+                  recorder.current.mark(retake ? 'retake_end' : 'retake_start');
+                  setRetake(!retake);
+                  setMarkerNotice(
+                    retake
+                      ? 'Retake section marked for review.'
+                      : 'Retake started. Click again when ready to keep teaching.'
+                  );
+                }}
+              >
+                <RotateCcw size={14} />
+                {retake ? 'End retake' : 'Start retake'}
+              </button>
+              <button
+                aria-pressed={pickRegion}
+                onClick={() => setPickRegion(!pickRegion)}
+              >
+                <ZoomIn size={14} /> Mark zoom region
+              </button>
+            </div>
+          )}
+          {markerNotice && (
+            <p className="small muted" role="status">
+              {markerNotice}
+            </p>
+          )}
           <div className="record-actions">
             <span className="timecode">{formatTime(time)}</span>
             <div className="spacer" />
@@ -452,10 +657,47 @@ export default function Recording({
               </>
             )}
           </div>
+          {!busy && (
+            <div className="automatic-recording-options">
+              <Toggle
+                label="Automatically edit after recording"
+                description="Save originals to this Mac, clean audio, suggest cuts, and prepare an MP4."
+                checked={automation.enabled}
+                onChange={(enabled) => setAutomation({ enabled })}
+              />
+              <Field label="Automatic editing preset">
+                <select
+                  value={automation.options.preset}
+                  onChange={(e) =>
+                    setAutomation({
+                      options: {
+                        ...automation.options,
+                        preset: e.target.value as
+                          | 'clean'
+                          | 'professional'
+                          | 'social',
+                        profile:
+                          e.target.value === 'social' ? 'vertical' : 'lms',
+                      },
+                    })
+                  }
+                >
+                  <option value="clean">Clean Tutorial</option>
+                  <option value="professional">Professional Tutorial</option>
+                  <option value="social">Social Media Short</option>
+                </select>
+              </Field>
+              <p className="small muted">
+                Requires the local studio service: npm run dev:all. Everything
+                stays on your Mac.
+              </p>
+            </div>
+          )}
           <div className="privacy-note">
             <ShieldCheck size={17} />
             <p>
-              Private by design. Your recordings stay in your browser.
+              Private by design. Originals stay in your browser and local studio
+              workspace.
               <br />
               <span>
                 Keep this tab open. Closing or reloading it can interrupt

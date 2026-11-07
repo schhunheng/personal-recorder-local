@@ -120,4 +120,54 @@ export function drawFrame(
     ctx.font = `600 ${width / 32}px sans-serif`;
     ctx.fillText(title, width * 0.06, height * 0.84, width * 0.88);
   }
+  const caption = edits.captions?.find((c) => c.start <= time && c.end > time),
+    style = edits.captionStyle;
+  if (caption && style?.burn) {
+    ctx.save();
+    const fontSize = (style.size * height) / 1080;
+    ctx.font = `500 ${fontSize}px "${style.font}", sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const lines: string[] = [];
+    for (const paragraph of caption.text.split('\n')) {
+      let line = '';
+      for (const part of new Intl.Segmenter(undefined, {
+        granularity: 'word',
+      }).segment(paragraph)) {
+        if (ctx.measureText(line + part.segment).width > width * 0.87 && line) {
+          lines.push(line);
+          line = '';
+        }
+        line += part.segment;
+      }
+      if (line) lines.push(line);
+    }
+    const shown = lines.slice(0, 5),
+      lineHeight = fontSize * 1.4;
+    const y =
+      style.position === 'top'
+        ? height * 0.12
+        : style.position === 'center'
+        ? height * 0.5 - (shown.length * lineHeight) / 2
+        : height * 0.9 - (shown.length - 1) * lineHeight;
+    if (style.animation === 'fade')
+      ctx.globalAlpha = Math.min(
+        1,
+        (time - caption.start) / 0.08,
+        (caption.end - time) / 0.08
+      );
+    shown.forEach((line, index) => {
+      const measured = ctx.measureText(line).width;
+      ctx.fillStyle = '#08140cce';
+      ctx.fillRect(
+        (width - measured) / 2 - fontSize * 0.3,
+        y + index * lineHeight - lineHeight / 2,
+        measured + fontSize * 0.6,
+        lineHeight
+      );
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(line, width / 2, y + index * lineHeight, width * 0.9);
+    });
+    ctx.restore();
+  }
 }

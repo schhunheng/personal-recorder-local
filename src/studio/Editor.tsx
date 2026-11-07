@@ -15,6 +15,7 @@ import {
   Scissors,
   Save,
   LoaderCircle,
+  Captions,
 } from 'lucide-react';
 import { useEditor, usePreferences } from './store';
 import {
@@ -36,6 +37,9 @@ import {
   listExports,
 } from './storage';
 import { SavedVideos } from './SavedVideos';
+import { CameraSettings } from './CameraSettings';
+import { CaptionEditor } from './CaptionEditor';
+import { AutomaticEditor } from './AutomaticEditor';
 import { Preview } from './Preview';
 import { Timeline } from './TimelinePanel';
 import { Toggle, Slider, Field } from './controls';
@@ -95,6 +99,9 @@ export default function Editor({ onBack }: { onBack: () => void }) {
     void job.catch((e) => setError(e.message));
     return job;
   }
+  useEffect(() => {
+    if (p.edits.waveform) setAnalysis(p.edits.waveform);
+  }, [p.edits.waveform]);
   useEffect(() => {
     setSaved(false);
     clearTimeout(saveTimer.current);
@@ -316,6 +323,12 @@ export default function Editor({ onBack }: { onBack: () => void }) {
           <Download size={15} /> Export video
         </Button>
       </div>
+      {p.warning && (
+        <p role="alert" className="inline-error">
+          {p.warning}
+        </p>
+      )}
+      <AutomaticEditor project={p} onEdits={(edits) => edit(() => edits)} />
       <div className="editor-workspace">
         <nav className="editor-tools" aria-label="Editing tools">
           {(
@@ -325,6 +338,7 @@ export default function Editor({ onBack }: { onBack: () => void }) {
               ['audio', AudioLines, 'Audio'],
               ['style', Palette, 'Style'],
               ['trim', Scissors, 'Trim'],
+              ['captions', Captions, 'Captions'],
             ] as const
           ).map(([id, Icon, label]) => (
             <button
@@ -349,6 +363,8 @@ export default function Editor({ onBack }: { onBack: () => void }) {
                 ? 'Audio studio'
                 : tool === 'trim'
                 ? 'Trim & cut'
+                : tool === 'captions'
+                ? 'Captions & chapters'
                 : 'Make it yours'}
             </h2>
             <span className="small muted">
@@ -492,74 +508,21 @@ export default function Editor({ onBack }: { onBack: () => void }) {
           )}
           {tool === 'camera' && (
             <>
-              <Toggle
-                label="Show overlay"
-                checked={p.edits.camera.visible}
-                onChange={(visible) => update('camera', { visible })}
-              />
               {!p.camera && !p.edits.avatar && (
                 <p className="muted small">
                   No webcam recorded. Import a loop avatar to add an overlay.
                 </p>
               )}
-              <Field label="Overlay shape">
-                <select
-                  value={p.edits.camera.shape}
-                  onChange={(e) =>
-                    update('camera', {
-                      shape: e.target.value as 'circle' | 'rounded',
-                    })
-                  }
-                >
-                  <option value="circle">Circle</option>
-                  <option value="rounded">Rounded square</option>
-                </select>
-              </Field>
-              <Slider
-                label="Size"
-                value={p.edits.camera.size}
-                min={0.08}
-                max={0.5}
-                step={0.01}
-                onChange={(size) => update('camera', { size })}
-              />
-              <Slider
-                label="Opacity"
-                value={p.edits.camera.opacity}
-                min={0.1}
-                max={1}
-                step={0.05}
-                onChange={(opacity) => update('camera', { opacity })}
-              />
-              <div className="corner-grid">
-                {[
-                  [0.17, 0.22, 'Top left'],
-                  [0.83, 0.22, 'Top right'],
-                  [0.17, 0.78, 'Bottom left'],
-                  [0.83, 0.78, 'Bottom right'],
-                ].map(([x, y, label]) => (
-                  <button
-                    key={label}
-                    onClick={() => update('camera', { x: +x, y: +y })}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-              <Toggle
-                label="Mirror camera"
-                checked={p.edits.camera.mirror}
-                onChange={(mirror) => update('camera', { mirror })}
-              />
-              <Toggle
-                label="Thin border"
-                checked={p.edits.camera.border}
-                onChange={(border) => update('camera', { border })}
-              />
-              <Toggle
-                label="Soft shadow"
-                checked={p.edits.camera.shadow}
-                onChange={(shadow) => update('camera', { shadow })}
+              <CameraSettings
+                camera={p.edits.camera}
+                onChange={(patch) => update('camera', patch)}
+                ratio={
+                  p.edits.appearance.ratio === '1:1'
+                    ? 1
+                    : p.edits.appearance.ratio === '9:16'
+                    ? 9 / 16
+                    : 16 / 9
+                }
               />
               <label className="upload-label">
                 <Plus size={14} /> Import loop avatar
@@ -848,6 +811,15 @@ export default function Editor({ onBack }: { onBack: () => void }) {
               />
             </>
           )}
+          {tool === 'captions' && (
+            <CaptionEditor
+              edits={p.edits}
+              duration={p.duration}
+              time={time}
+              setTime={setTime}
+              onChange={(edits) => edit(() => edits)}
+            />
+          )}
           {tool === 'trim' && (
             <>
               <p className="muted small">
@@ -1032,6 +1004,9 @@ export default function Editor({ onBack }: { onBack: () => void }) {
                   <option value={720}>720p</option>
                   <option value={1080}>1080p · Full HD</option>
                   <option value={1440}>1440p · 2K</option>
+                  {p.edits.appearance.ratio === '9:16' && (
+                    <option value={1920}>1920p · 1080 × 1920 vertical</option>
+                  )}
                 </select>
               </Field>
               <Field label="Frame rate">

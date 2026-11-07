@@ -9,7 +9,8 @@ import {
 } from 'lucide-react';
 import type { Project } from './model';
 import { clamp, formatTime } from './model';
-import { assetBlob, getAsset } from './storage';
+import { assetBlob, getAsset, localMediaURL } from './storage';
+import { playMedia } from './useMediaPlayback';
 import { audioGraph, type AudioGraph } from './audio';
 import { drawFrame, screenBounds } from './compositor';
 import { loadVideo, seek, unloadVideo } from './media';
@@ -59,7 +60,9 @@ export function Preview({
     setError('');
     setPlaying(false);
     void (async () => {
-      const url = URL.createObjectURL(await assetBlob(project.screen));
+      const url =
+        localMediaURL(project.screen) ||
+        URL.createObjectURL(await assetBlob(project.screen));
       urls.push(url);
       localScreen = await loadVideo(url);
       if (gone) {
@@ -72,7 +75,8 @@ export function Preview({
         : project.camera;
       if (cam) {
         try {
-          const u = URL.createObjectURL(await assetBlob(cam));
+          const u =
+            localMediaURL(cam) || URL.createObjectURL(await assetBlob(cam));
           urls.push(u);
           localCamera = await loadVideo(u);
           localCamera.muted = true;
@@ -163,6 +167,17 @@ export function Preview({
     };
   }, [project.id, project.edits.avatar]);
   useEffect(() => {
+    const pause = (event: Event) => {
+      if ((event as CustomEvent).detail !== screen.current) {
+        screen.current?.pause();
+        camera.current?.pause();
+        setPlaying(false);
+      }
+    };
+    window.addEventListener('studio-media-play', pause);
+    return () => window.removeEventListener('studio-media-play', pause);
+  }, []);
+  useEffect(() => {
     if (suspended) {
       screen.current?.pause();
       camera.current?.pause();
@@ -211,6 +226,7 @@ export function Preview({
         await seek(video, ranges[0].start);
       if (camera.current && !project.edits.avatar)
         await seek(camera.current, video.currentTime);
+      playMedia(video);
       await video.play();
       if (camera.current) await camera.current.play();
       setPlaying(true);
@@ -222,7 +238,11 @@ export function Preview({
     const key = (e: KeyboardEvent) => {
       if (document.querySelector('[role="dialog"],[role="alertdialog"]'))
         return;
-      if ((e.target as HTMLElement).matches('input,textarea,select,button'))
+      if (
+        (e.target as HTMLElement).matches(
+          'input,textarea,select,button,video,audio'
+        )
+      )
         return;
       if (e.code === 'Space') {
         e.preventDefault();

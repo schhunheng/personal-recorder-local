@@ -27,7 +27,7 @@ def ai_status(model_dir: str) -> tuple[bool, str]:
 
 
 def process_audio(source: Path, target: Path, mode: str, strength: float,
-                  cancel: Event, progress: Callable[[float], None], model_dir: str = ''):
+                  cancel: Event, progress: Callable[[float], None], model_dir: str = '', normalize: bool = True):
     """Off copies samples; other modes normalize active speech RMS with <=12 dB boost.
 
     Ten-second cores with one-second context avoid full-recording RAM use. Context is
@@ -72,7 +72,7 @@ def process_audio(source: Path, target: Path, mode: str, strength: float,
                 dst.write(data)
                 progress(0.8 * min(total, start + core) / max(1, total))
         rms = np.sqrt(energy / max(1, active_samples))
-        gain = 1.0 if mode == 'off' else min(10 ** (12 / 20), 10 ** (-20 / 20) / max(rms, 1e-9), 0.95 / max(peak, 1e-9))
+        gain = 1.0 if mode == 'off' or not normalize else min(10 ** (12 / 20), 10 ** (-20 / 20) / max(rms, 1e-9), 0.95 / max(peak, 1e-9))
         with sf.SoundFile(raw) as src, sf.SoundFile(target, 'w', samplerate=src.samplerate, channels=1, subtype='PCM_24') as dst:
             written = 0
             for block in src.blocks(blocksize=48000 * 5, dtype='float32'):

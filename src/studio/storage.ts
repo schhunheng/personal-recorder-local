@@ -61,6 +61,7 @@ export const listProjects = () =>
   transaction<Project[]>('projects', 'readonly', (s) => s.getAll()).then((p) =>
     p.sort((a, b) => b.created - a.created)
   );
+export const saveAssetReference = (asset: Asset) => transaction('assets', 'readwrite', s => s.put(asset));
 export const getAsset = (id: string) =>
   transaction<Asset>('assets', 'readonly', (s) => s.get(id));
 
@@ -162,7 +163,29 @@ export class AssetWriter {
     return { ...this.asset };
   }
 }
+export function localMediaURL(asset: Asset) {
+  if (asset.storage !== 'local-api') return undefined;
+  if (
+    !asset.url ||
+    !/^\/api\/studio\/(?:jobs\/[a-f0-9-]{36}\/files\/video|projects\/[a-f0-9-]{36}\/assets\/(?:screen|microphone|camera|avatar))$/.test(
+      asset.url
+    )
+  )
+    throw Error('Invalid local media reference.');
+  if (!['127.0.0.1', 'localhost', '[::1]'].includes(window.location.hostname))
+    throw Error(
+      'Open the studio on localhost to access media saved on your Mac.'
+    );
+  return asset.url;
+}
 export async function assetBlob(asset: Asset): Promise<Blob> {
+  const local = localMediaURL(asset);
+  if (local) {
+    const response = await fetch(local);
+    if (!response.ok)
+      throw Error('Start the local studio service to open this saved video.');
+    return response.blob();
+  }
   if (asset.storage === 'opfs') {
     const file = await (
       await (await directory()).getFileHandle(asset.id)
@@ -192,6 +215,7 @@ export async function importAsset(file: Blob) {
   }
 }
 export async function deleteAsset(asset: Asset) {
+  if (asset.storage === 'local-api') return; // Local job files remain until explicitly deleted through the local service.
   if (asset.storage === 'opfs')
     await (await directory()).removeEntry(asset.id).catch((e) => {
       if (e.name !== 'NotFoundError') throw e;
@@ -242,6 +266,7 @@ export async function deleteProject(project: Project) {
   for (const asset of [
     project.screen,
     project.camera,
+    project.microphone,
     ...exported.map((e) => e.asset),
     project.edits.avatar ? await getAsset(project.edits.avatar) : undefined,
   ]) {

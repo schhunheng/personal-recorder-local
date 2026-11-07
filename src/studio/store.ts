@@ -1,19 +1,38 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { defaultPipeline, type PipelineOptions } from './pipeline';
 import {
   defaultRecording,
+  defaultCamera,
+  type Camera,
   type RecordingOptions,
   type Edits,
   type Project,
 } from './model';
 export const usePreferences = create(
   persist<{
+    overlay: Camera;
+    setOverlay: (patch: Partial<Camera>) => void;
+    avatarId?: string;
+    setAvatarId: (id?: string) => void;
+    automation: { enabled: boolean; options: PipelineOptions };
+    setAutomation: (
+      value: Partial<{ enabled: boolean; options: PipelineOptions }>
+    ) => void;
     zoom: { scale: number; duration: number };
     setZoom: (value: Partial<{ scale: number; duration: number }>) => void;
     recording: RecordingOptions;
     setRecording: (value: Partial<RecordingOptions>) => void;
   }>(
     (set) => ({
+      overlay: { ...defaultCamera },
+      setOverlay: (patch) =>
+        set((state) => ({ overlay: { ...state.overlay, ...patch } })),
+      avatarId: undefined,
+      setAvatarId: (avatarId) => set({ avatarId }),
+      automation: { enabled: true, options: defaultPipeline },
+      setAutomation: (value) =>
+        set((state) => ({ automation: { ...state.automation, ...value } })),
       zoom: { scale: 2, duration: 0.7 },
       setZoom: (value) =>
         set((state) => ({ zoom: { ...state.zoom, ...value } })),

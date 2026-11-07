@@ -1,4 +1,10 @@
-import { defaultEdits, type Project, type RecordingOptions } from './model';
+import {
+  defaultCamera,
+  type Camera,
+  defaultEdits,
+  type Project,
+  type RecordingOptions,
+} from './model';
 import {
   AssetWriter,
   saveProject,
@@ -30,6 +36,7 @@ export class StudioRecorder {
   private timer?: ReturnType<typeof setInterval>;
   private elapsed = 0;
   private started = 0;
+  private clockOrigin = 0;
   private cancelled = false;
   private starting = false;
   private cancelWait?: Promise<void>;
@@ -37,6 +44,7 @@ export class StudioRecorder {
   private metadata: Promise<unknown> = Promise.resolve();
   private stopping?: Promise<void>;
   private project?: Project;
+  private overlay: Camera = { ...defaultCamera };
   private failed = false;
   get seconds() {
     return (
@@ -80,6 +88,7 @@ export class StudioRecorder {
       };
       const settings = displayTrack.getSettings();
       const audioStreams: MediaStream[] = [];
+      let microphone: MediaStream | undefined;
       if (this.screen.getAudioTracks().length)
         audioStreams.push(new MediaStream(this.screen.getAudioTracks()));
       else if (options.systemAudio)
@@ -96,6 +105,7 @@ export class StudioRecorder {
           },
           video: false,
         });
+        microphone = mic;
         this.streams.push(mic);
         this.checkCancelled();
         audioStreams.push(mic);
@@ -138,7 +148,9 @@ export class StudioRecorder {
         analyser.fftSize = 1024;
         const bus = this.audio.createGain();
         bus.connect(dest);
-        bus.connect(analyser);
+        if (microphone)
+          this.audio.createMediaStreamSource(microphone).connect(analyser);
+        else bus.connect(analyser);
         audioStreams.forEach((s) =>
           this.audio!.createMediaStreamSource(s).connect(bus)
         );
@@ -152,6 +164,16 @@ export class StudioRecorder {
         ? await new AssetWriter(mime).open()
         : undefined;
       if (cameraWriter) this.writers.push(cameraWriter);
+      const micMime = microphone
+        ? ['audio/webm;codecs=opus', 'audio/mp4'].find((type) =>
+            MediaRecorder.isTypeSupported(type)
+          )
+        : undefined;
+      const micWriter =
+        microphone && micMime
+          ? await new AssetWriter(micMime).open()
+          : undefined;
+      if (micWriter) this.writers.push(micWriter);
       this.project = {
         id: crypto.randomUUID(),
         title: `Untitled lesson · ${new Date().toLocaleDateString()}`,
@@ -162,13 +184,15 @@ export class StudioRecorder {
         complete: false,
         screen: screenWriter.asset,
         camera: cameraWriter?.asset,
-        edits: defaultEdits(0),
+        microphone: micWriter?.asset,
+        markers: [],
+        edits: { ...defaultEdits(0), camera: { ...this.overlay } },
       };
       await saveProject(this.project);
       this.checkCancelled();
       const makeRecorder = (stream: MediaStream, writer: AssetWriter) => {
         const recorder = new MediaRecorder(stream, {
-          mimeType: mime,
+          mimeType: writer.asset.mime,
           videoBitsPerSecond: options.height >= 1440 ? 14_000_000 : 8_000_000,
           audioBitsPerSecond: 192_000,
         });
@@ -219,6 +243,7 @@ export class StudioRecorder {
         screenWriter
       );
       if (this.camera && cameraWriter) makeRecorder(this.camera, cameraWriter);
+      if (microphone && micWriter) makeRecorder(microphone, micWriter);
       this.onReady();
       this.setState('countdown');
       for (let n = 3; n > 0; n--) {
@@ -227,7 +252,18 @@ export class StudioRecorder {
         this.checkCancelled();
       }
       this.checkCancelled();
-      this.recorders.forEach((r) => r.start(1000));
+      this.clockOrigin = performance.now();
+      this.project.timing = {
+        startedAt: Date.now(),
+        trackOffsetsMs: {},
+        pauses: [],
+        sampleRate: this.audio?.sampleRate,
+      };
+      this.recorders.forEach((r, index) => {
+        this.project!.timing!.trackOffsetsMs[this.writers[index].asset.id] =
+          performance.now() - this.clockOrigin;
+        r.start(1000);
+      });
       this.starting = false;
       this.started = performance.now();
       this.setState('recording');
@@ -263,10 +299,37 @@ export class StudioRecorder {
     )
       throw Error('Capture cancelled.');
   }
+  setOverlay(camera: Camera) {
+    this.overlay = { ...camera };
+    if (this.project) this.project.edits.camera = { ...camera };
+  }
+  mark(
+    kind: NonNullable<Project['markers']>[number]['kind'],
+    x = 0.5,
+    y = 0.5,
+    label = ''
+  ) {
+    if (!this.project || !['recording', 'paused'].includes(this.state)) return;
+    this.project.markers ||= [];
+    this.project.markers.push({
+      id: crypto.randomUUID(),
+      time: this.seconds,
+      kind,
+      x,
+      y,
+      label,
+    });
+    this.metadata = this.metadata
+      .catch(() => {})
+      .then(() => saveProject(this.project!));
+  }
   pause() {
     if (this.state !== 'recording') return;
     try {
       this.elapsed = this.seconds;
+      this.project?.timing?.pauses.push({
+        start: (performance.now() - this.clockOrigin) / 1000,
+      });
       this.recorders.forEach((r) => r.pause());
       this.setState('paused');
     } catch {
@@ -279,6 +342,8 @@ export class StudioRecorder {
   resume() {
     if (this.state !== 'paused') return;
     try {
+      const pause = this.project?.timing?.pauses.at(-1);
+      if (pause) pause.end = (performance.now() - this.clockOrigin) / 1000;
       this.recorders.forEach((r) => r.resume());
       this.started = performance.now();
       this.setState('recording');
@@ -297,6 +362,9 @@ export class StudioRecorder {
     }
     if (this.stopping) return this.stopping;
     this.elapsed = this.seconds;
+    const pause = this.project?.timing?.pauses.at(-1);
+    if (pause && pause.end === undefined)
+      pause.end = (performance.now() - this.clockOrigin) / 1000;
     this.setState('saving');
     this.stopping = (async () => {
       await Promise.all(

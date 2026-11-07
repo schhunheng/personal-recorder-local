@@ -1,50 +1,67 @@
-# Browser studio architecture
+# Local automated studio architecture
 
-The active application has no service API. Vite serves development assets; a static HTTPS host serves production. Screen, microphone, camera, and imported media stay in the browser.
+The current brief permits a local FastAPI service. The original browser-only recorder/editor is preserved and enhanced; its captured media is finalized to the local machine for asynchronous FFmpeg jobs. No Electron integration, cloud API, telemetry, or remote media service is required.
+
+## Frontend modules
 
 | Module | Responsibility |
 | --- | --- |
-| `model.ts` | Serializable project, asset, recording settings, nondestructive edits |
-| `capabilities.ts` | Secure-context/API/codec checks and permission errors |
-| `recorder.ts` | User-activated picker, device acquisition, Web Audio mix, separate screen/webcam MediaRecorders, pause clock, chunk backpressure, lifecycle cleanup |
-| `storage.ts` | IndexedDB project/asset/chunk transactions, sequential OPFS output, imports, shared-source duplication/deletion, downloads |
-| `store.ts` | Zustand preferences, editor state, bounded undo/redo history |
-| `timeline.ts` | Merged cut ranges, retained segments, duration, bounded smooth zoom, padded silence regions |
-| `compositor.ts` | Shared preview/export Canvas renderer, crop/fitting, overlay, style, branding |
-| `audio.ts` and `public/audio/studio-cleanup.js` | Local preview/export audio graph and envelope noise gate |
-| `analyze.ts` and `analysis.worker.ts` | Streaming RMS waveform extraction and worker-based pause detection |
-| `export.ts` | Source playback/seek, matching canvas composition, audio destination, native encoding, output progress/cancellation/cleanup |
-| `App.tsx`, `Recording.tsx`, `Editor.tsx` | Dashboard/storage library, capture controls, editing workspace |
-| `Preview.tsx`, `TimelinePanel.tsx`, `controls.tsx`, `useDialog.ts` | Reusable presentation, playback, editing controls, modal keyboard handling |
+| `model.ts`, `store.ts` | Source assets, timing/markers, captions, nondestructive edits, preferences, bounded undo/redo |
+| `recorder.ts` | User-activated Screen Capture picker, audio mix, independent microphone/webcam recorders, pause-aware source clock, chunk persistence/backpressure, cleanup |
+| `storage.ts`, `SavedVideos.tsx` | IndexedDB project/export library, OPFS native export, local-service media references, distinct original/edited playback/download |
+| `pipeline.ts` | Loopback-only API, immutable asset finalization, SSE subscription, EDL conversion, local-project recovery |
+| `AutomaticEditor.tsx` | Automatic start after Stop, presets, measured stage progress, explicit fallbacks, preview/audio comparison, draft review, local MP4 export |
+| `Editor.tsx`, `Preview.tsx`, `TimelinePanel.tsx` | Existing timeline, zoom/camera/trim/audio/style editing and preview |
+| `captions.ts`, `CaptionEditor.tsx` | Validated UTF-8 SRT, cut-time remapping, caption text/timestamps/style, reviewable chapter labels |
+| `compositor.ts`, `export.ts` | Shared Canvas/native-browser fallback, including editable captions and layout |
+
+Frontend automatic uploads are refused outside localhost. Vite proxies `/api` to 127.0.0.1:8001. Media references accept only fixed UUID-based studio paths; they cannot refer to arbitrary third-party URLs.
+
+## Backend modules
+
+| Module | Responsibility |
+| --- | --- |
+| `studio_models.py` | Strict finite/range-checked request/EDL schemas without user filesystem paths |
+| `studio_api.py` | Immutable streamed originals, job finalization/status/SSE/cancel, timeline updates, fixed result routes, explicit project deletion |
+| `studio_jobs.py` | SQLite/WAL durable project/job state, one bounded worker, restart recovery, ffprobe validation, local orchestration |
+| `edit_decisions.py` | Padded pause proposals, explicit retakes/zoom markers, retained ranges, caption/chapter remapping, SRT/FFmetadata |
+| `speech.py` | Bounded-memory waveform/energy analysis, optional installed Silero VAD and local-only faster-whisper adapters |
+| `render.py` | Per-range FFmpeg composition, cached static masks/shadows, camera/avatar, H.264/AAC, concatenation, optional libass text, chapter metadata |
+| `audio.py`, `jobs.py` | Reused legacy audio engine and subprocess timeout/cancellation/progress primitives; legacy routes remain compatible |
+
+SQLite stores canonical job status/options/result/errors and versioned current timeline metadata. Each job has its own directory. Originals and prior results are never reused as writable output paths. Existing legacy audio recordings are retained; legacy automatic expiry is disabled by the current application.
+
+## API
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/studio/capabilities` | FFmpeg readiness, subtitle-filter support, installed offline VAD/transcription availability, limits |
+| `POST /api/studio/projects` | Idempotent recording/project metadata creation |
+| `PUT /api/studio/projects/{id}/assets/{kind}` | Stream screen/microphone/camera/avatar to local disk with byte limit/hash; preserve existing originals |
+| `GET /api/studio/projects` / `GET …/{id}` | Durable library, saved EDL/version, latest job, asset references; restore after browser-data loss |
+| `GET …/{id}/assets/{kind}` | Range-capable original playback/download |
+| `POST …/{id}/process` | Create or return the active local job; plan a draft or render the supplied reviewed EDL |
+| `PUT …/{id}/timeline` | Optimistic current-timeline update with `base_version`; stale versions return 409 |
+| `GET /api/studio/jobs/{id}` / `GET …/events` | Authoritative persisted status and SSE updates/heartbeats |
+| `POST …/jobs/{id}/cancel` | Cooperative worker/subprocess cancellation |
+| `GET …/jobs/{id}/files/{kind}` | Fixed video, EDL, SRT, original/cleaned audio, chapter results; no arbitrary filenames |
+| `DELETE …/projects/{id}` | Explicit local-file deletion; active jobs must be cancelled first |
 
 ## Media invariants
 
-1. Call getDisplayMedia before awaiting storage/device work, preserving transient activation. Picker source hints cannot constrain the user’s final choice.
-2. Record the original screen track directly. No UI canvas throttling affects the captured screen. Webcam is a separate immutable asset; both recorders start, pause, resume, and stop together.
-3. Mix permitted display audio and microphone using a shared AudioContext destination. That one mixed track travels with screen video. No speaker monitoring during recording, avoiding feedback.
-4. Commit one-second original chunks to IndexedDB, with a 32 MiB pending-write safety bound. Never collect the entire capture in a JS array. Mark the project complete only after recording and storage finalization.
-5. Interrupted assets and saved metadata survive reload where browser storage permits. A partially finalized container may not decode completely.
-6. Editing only changes JSON metadata. Sources are shared by duplicates and deleted only when no other saved project references them.
-7. Preview and export call the same drawFrame function. Zoom focus is clamped to source bounds. Camera/avatar coordinates are independent of screen crops.
-8. Retained source-time ranges determine preview/export order. Pausing the encoder around source seeks excludes removed timeline sections.
-9. Export uses the exact detected codec MIME string. A native encoder error is surfaced, never renamed to a different file format.
-10. Cancelled/failed exports stop video, camera, audio contexts, canvas tracks, temporary output, and object URLs. Completed exports have their own persisted records, including project ID, media asset, creation date, duration, and edit snapshot. They survive editor exit and reload.
-11. IndexedDB schema version 2 adds an indexed exports store while preserving version-1 project/media stores. Export metadata is committed only for an existing project. Project deletion removes its exports and checks remaining project/export references before deleting media.
+1. Call getDisplayMedia before awaited storage/device work. Source preferences are picker hints. No global cursor/click tracking is invented.
+2. Record original screen directly, plus a separate microphone asset when supported and a separate camera. The screen contains the permitted microphone/system mix. Track offsets and pauses are recorded; backend audio extraction preserves initial audio timestamps.
+3. Commit one-second chunks during capture with a 32 MiB pending-write safety bound. Do not keep full video byte arrays or full-length decoded PCM in JS.
+4. Save originals before queueing processing. UUID-derived paths, validated media, fixed stream maps, subprocess argument arrays, protocol restrictions, and Host/Origin checks constrain local access.
+5. Use one local worker to limit M1 resource contention. SQLite commits every stage; SSE reports real per-stage progress, with indeterminate progress where no useful measure exists.
+6. Generate source-time EDL proposals. Retakes require paired explicit markers. A fully quiet clip is not automatically emptied. Edits are reversible; original bytes remain unchanged.
+7. FFmpeg composes each retained range with source-time zoom/camera metadata; short audio fades avoid clicks. Static corner masks/shadows are evaluated once and held, avoiding costly full-resolution per-frame expression work.
+8. Preserve previous outputs and intermediate files. Restarted jobs are marked failed with retry guidance; a new job gets a new ID/folder. Progress disconnects never mean a job should be restarted.
+9. Stream local-service media directly where possible. The browser keeps lightweight references to durable MP4 outputs, and dashboard recovery can recreate its library entries.
+10. Optional model absence/failure is explicit. AI denoising falls back to FFmpeg. VAD Auto falls back to labeled energy suggestions. Whisper uses only an existing local model directory. Missing libass leaves the MP4 usable with an explicit text-overlay warning and SRT/browser alternatives.
 
-## Capability review
+## Known boundaries
 
-[Screen Capture API](https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getDisplayMedia) requires HTTPS/localhost, active user interaction, and a new picker for each session. System audio is optional and varies by OS/source; no assumed loopback recording.
+Automatic zoom uses explicit markers/regions; no unverified frame/cursor analysis is exposed. Social selection uses marked/beginning ranges, not semantic highlight detection. Chapter labels are narration excerpts for review. No verified background-removal or post-recording dereverberation model is claimed. Modern Chrome recording/hardware sync, a real 30-minute lesson, full visual QA, and model quality still need external acceptance tests.
 
-[MediaRecorder codec detection](https://developer.mozilla.org/en-US/docs/Web/API/MediaRecorder/isTypeSupported_static) is a capability hint, not a guarantee that every resolution/frame-rate combination has enough resources. Output errors and supported alternatives are explicit.
-
-[FFmpeg.wasm FAQ](https://ffmpegwasm.netlify.app/docs/faq/) identifies browser/WASM memory and performance costs. Native real-time export is the installed working implementation path. A WASM fallback requires actual packaged local core assets, memory budgeting, and codec verification; it is pending package availability and integration validation.
-
-## Smart-feature evaluation
-
-Global cursor/click positions in other applications are unavailable to a normal website. No global listeners are installed. Template-based cursor detection is fragile across OS cursor themes/scales and may confuse code glyphs with cursors. Optical-flow centroids can prioritize scrolling or blinking elements rather than important code. Low-resolution frame differences could suggest visual activity regions, but need confidence thresholds and a measurable fixture set before exposure. Manual zoom is the reliable path; experimental UI describes this limitation without inventing detections.
-
-Basic high-pass/gate/compressor processing is language-independent and local. It is not a semantic voice separator. RNNoise and browser ONNX are possible future optional engines; the current editor does not expose them as verified working features. Speech energy plus pause padding is intentionally reviewable and reversible, especially for quiet Khmer syllables.
-
-## Performance acceptance still required
-
-Use the checklist in VALIDATION.md for a real 30-minute M1 lesson. The 30-minute unit fixture validates edit calculations only. Lower-resolution preview canvases reduce composition work, but original-source decoding still occurs; no proxy transcoding pipeline is claimed. Export currently draws on a main-thread canvas. Background-tab rendering and sleep remain platform limits.
+Primary references: [FFmpeg filters](https://ffmpeg.org/ffmpeg-filters.html), [Silero VAD](https://github.com/snakers4/silero-vad), [faster-whisper](https://github.com/SYSTRAN/faster-whisper), [Screen Capture API](https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getDisplayMedia).

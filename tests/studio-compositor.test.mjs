@@ -76,3 +76,27 @@ test('screen fitting preserves source aspect ratio for portrait and square outpu
     assert.ok(Math.abs(b.w / b.h - 16 / 9) < 1e-8);
   }
 });
+test('hiding an overlay removes it from rendered frames and showing it restores the chosen position', () => {
+  const edits = defaultEdits(10),
+    screen = { videoWidth: 1920, videoHeight: 1080, readyState: 4 },
+    camera = { videoWidth: 640, videoHeight: 480, readyState: 4 };
+  edits.camera = {
+    ...edits.camera,
+    visible: false,
+    x: 0.15,
+    y: 0.2,
+    mirror: false,
+  };
+  const hidden = context();
+  drawFrame(hidden, screen, camera, edits, 1, 1920, 1080);
+  assert.equal(hidden.calls.filter((c) => c[0] === 'drawImage').length, 1);
+  edits.camera.visible = true;
+  const visible = context();
+  drawFrame(visible, screen, camera, edits, 1, 1920, 1080);
+  assert.equal(visible.calls.filter((c) => c[0] === 'drawImage').length, 2);
+  const radius = (1080 * edits.camera.size) / 2;
+  assert.deepEqual(
+    visible.calls.find((c) => c[0] === 'translate'),
+    ['translate', 1920 * 0.15 - radius, 1080 * 0.2 - radius]
+  );
+});
