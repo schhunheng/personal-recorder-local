@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "id": "a1171614-492a-4cb1-8fe4-aa8711bafb4a",
+  "title": "Untitled lesson · 11/8/2026",
+  "originals": {
+    "screen": {
+      "file": "Untitled-lesson-11-8-2026-a1171614-492a-4cb1-8fe4-aa8711bafb4a.webm",
+      "bytes": 15084384,
+      "sha256": "89d0505c45d5f8d1817bb9a0abc6d57e088be71c2497ff69b233f6e5591f7105"
+    },
+    "microphone": {
+      "file": "microphone-a1171614-492a-4cb1-8fe4-aa8711bafb4a.webm",
+      "bytes": 4491575,
+      "sha256": "73dfeda4d653d9203b05f6da42ac93edcac08871f868bfe59c489a482e1dcd37"
+    },
+    "camera": {
+      "file": "camera-a1171614-492a-4cb1-8fe4-aa8711bafb4a.webm",
+      "bytes": 186618100,
+      "sha256": "710b789a1e81a194c21394d7c5bbd0f1f1cfcabd884e0adc5ea4c15085728d10"
+    }
+  },
+  "edits": [
+    {
+      "id": "f341cf77-6b3d-4c2f-a6b6-ebac9cbef18b",
+      "version": 1,
+      "file": "edit1-a1171614-492a-4cb1-8fe4-aa8711bafb4a.mp4",
+      "bytes": 9812045,
+      "sha256": "3e890087096ccc32bad208ccd669e6e97a2d83a166a7c73023551d659ec9ee79",
+      "created": 1794113521.9352992
+    }
+  ]
+}

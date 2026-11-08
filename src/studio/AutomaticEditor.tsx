@@ -9,7 +9,16 @@ import {
   X,
 } from 'lucide-react';
 import { Button } from '../components/ui/button';
-import { Field, Slider, Toggle } from './controls';
+import { AutomationSettings } from './AutomationSettings';
+import { AudioComparison } from './AudioComparison';
+import {
+  editingSteps,
+  processingLabels,
+  processingStage,
+  audioReady,
+  cutsChanged,
+  type EditingStep,
+} from './automation-flow';
 import type { Project, Edits, SavedExport } from './model';
 import { bytes, formatTime } from './model';
 import { saveExport } from './storage';
@@ -39,7 +48,13 @@ export function AutomaticEditor({
   const [options, setOptions] = useState<PipelineOptions>(() => ({
     ...defaultPipeline,
     ...prefs.options,
+    noise:
+      prefs.options.noise === 'ai'
+        ? 'balanced'
+        : prefs.options.noise || defaultPipeline.noise,
   }));
+  const [step, setStep] = useState<EditingStep>(0);
+  const completedShown = useRef('');
   const [expanded, setExpanded] = useState(
       !!project.processing?.requested || !!project.processing?.jobId
     ),
@@ -57,7 +72,6 @@ export function AutomaticEditor({
     stopWatch = useRef<(() => void) | undefined>(undefined),
     alive = useRef(true),
     startingEdits = useRef('');
-  const submitted = useRef(false);
   function patch(values: Partial<NonNullable<Project['processing']>>) {
     useEditor.setState((state) =>
       state.project?.id === project.id
@@ -97,12 +111,18 @@ export function AutomaticEditor({
     setJob(next);
     setConnection('');
     if (next.status === 'completed' && next.result) {
+      if (completedShown.current !== next.id) {
+        completedShown.current = next.id;
+        setStep(2);
+      }
       setDraft(next.result.edl);
       patch({ requested: false, error: undefined });
       const record: SavedExport = {
         id: `local-${next.id}`,
         projectId: project.id,
-        title: `${latest.current.project.title}-edited.mp4`,
+        title:
+          next.result.file_name || `${latest.current.project.title}-edited.mp4`,
+        libraryPath: next.result.library_path,
         created: Math.round(next.created * 1000),
         duration: next.result.duration,
         asset: {
@@ -143,9 +163,10 @@ export function AutomaticEditor({
       }
     );
   }
-  async function run(action: 'plan' | 'render' = 'plan') {
+  async function run(action: 'plan' | 'render' = 'plan', reviewed?: EDL) {
     if (busy || activePipeline(job)) return;
     setExpanded(true);
+    setStep(1);
     setBusy(true);
     setError('');
     setUpload(0);
@@ -161,7 +182,7 @@ export function AutomaticEditor({
           'FFmpeg is not installed. Install it and restart the local studio service.'
         );
       const snapshot = structuredClone(latest.current.project);
-      const request = { ...options, action, edl: toEDL(snapshot) };
+      const request = { ...options, action, edl: reviewed || toEDL(snapshot) };
       const next = await startPipeline(
         snapshot,
         request,
@@ -204,15 +225,15 @@ export function AutomaticEditor({
         .then((next) => {
           if (alive.current) {
             void receive(next);
-            if (activePipeline(next)) subscribe(next.id);
+            if (activePipeline(next)) {
+              setStep(1);
+              subscribe(next.id);
+            }
           }
         })
         .catch((e) => {
           if (alive.current) setError(e.message);
         });
-    } else if (project.processing?.requested && !submitted.current) {
-      submitted.current = true;
-      void run();
     }
     return () => {
       alive.current = false;
@@ -229,7 +250,7 @@ export function AutomaticEditor({
         setError((e as Error).message);
       }
   }
-  async function saveTimeline() {
+  async function saveTimeline(reviewed?: EDL) {
     try {
       const remote = await localRequest<{ version: number }>(
         `/projects/${project.id}`
@@ -239,15 +260,24 @@ export function AutomaticEditor({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           base_version: remote.version,
-          edl: toEDL(latest.current.project),
+          edl: reviewed || toEDL(latest.current.project),
         }),
       });
       setConnection('Current timeline saved to the local studio workspace.');
+      if (reviewed) apply(reviewed);
     } catch (error) {
       setError((error as Error).message);
     }
   }
   const running = busy || activePipeline(job);
+  const ready = job?.status === 'completed' && !!job.result;
+  const stage = processingStage(job, upload);
+  const changed = cutsChanged(draft, job);
+  const result = job?.result;
+  async function exportReviewed() {
+    if (!draft) return;
+    await run('render', { ...toEDL(latest.current.project), cuts: draft.cuts });
+  }
   return (
     <section className="automatic-editor">
       <button
@@ -260,355 +290,286 @@ export function AutomaticEditor({
         <span>
           {running
             ? job?.stage || 'Saving originals to this Mac'
-            : job?.status === 'completed'
-            ? 'Draft ready to review'
-            : 'Clean audio. Thoughtful cuts. Ready to share.'}
+            : ready
+            ? 'Your draft is ready to review'
+            : 'Four clear steps from recording to finished video'}
         </span>
         <ChevronDown size={16} />
       </button>
       {expanded && (
-        <div className="automation-body">
-          <div className="automation-settings">
-            <Field label="Editing preset">
-              <select
-                value={options.preset}
-                disabled={running}
-                onChange={(e) =>
-                  update({
-                    preset: e.target.value as PipelineOptions['preset'],
-                    profile: e.target.value === 'social' ? 'vertical' : 'lms',
-                  })
-                }
-              >
-                <option value="clean">Clean Tutorial</option>
-                <option value="professional">Professional Tutorial</option>
-                <option value="social">Social Media Short</option>
-              </select>
-            </Field>
-            <Field label="Noise cleanup">
-              <select
-                value={options.noise}
-                disabled={running}
-                onChange={(e) =>
-                  update({ noise: e.target.value as PipelineOptions['noise'] })
-                }
-              >
-                <option value="off">Off</option>
-                <option value="light">Light</option>
-                <option value="balanced">Balanced</option>
-                <option value="strong">Strong</option>
-                <option value="ai">Local AI · FFmpeg fallback</option>
-              </select>
-            </Field>
-            <Field label="Export profile">
-              <select
-                value={options.profile}
-                disabled={running}
-                onChange={(e) =>
-                  update({
-                    profile: e.target.value as PipelineOptions['profile'],
-                  })
-                }
-              >
-                <option value="lms">YouTube / LMS · 1920 × 1080</option>
-                <option value="vertical">Reels / TikTok · 1080 × 1920</option>
-              </select>
-            </Field>
-            <Field label="Speech detection">
-              <select
-                value={options.vad}
-                disabled={running}
-                onChange={(e) =>
-                  update({ vad: e.target.value as PipelineOptions['vad'] })
-                }
-              >
-                <option value="auto">
-                  Silero when installed · energy fallback
-                </option>
-                <option value="silero" disabled={!caps?.silero}>
-                  Silero VAD{!caps?.silero ? ' · not installed' : ''}
-                </option>
-                <option value="energy">
-                  Energy-based · manual review advised
-                </option>
-              </select>
-            </Field>
-            <Field label="Encoding quality">
-              <select
-                value={options.quality}
-                disabled={running}
-                onChange={(e) =>
-                  update({ quality: e.target.value as 'high' | 'standard' })
-                }
-              >
-                <option value="high">High · clear code</option>
-                <option value="standard">Standard · smaller output</option>
-              </select>
-            </Field>
-            <Slider
-              label="Maximum bitrate"
-              value={options.bitrate_mbps}
-              min={2}
-              max={30}
-              step={1}
-              suffix=" Mbps"
-              onChange={(bitrate_mbps) => update({ bitrate_mbps })}
-            />
-            {options.preset === 'social' && (
+        <div className="guided-automation">
+          <nav className="editing-stepper" aria-label="Automatic editing steps">
+            {editingSteps.map((label, index) => {
+              const complete =
+                index === 0
+                  ? !!job
+                  : index === 1
+                  ? ready
+                  : index === 2
+                  ? step === 3
+                  : false;
+              return (
+                <button
+                  key={label}
+                  type="button"
+                  aria-current={step === index ? 'step' : undefined}
+                  disabled={
+                    (index >= 2 && (!ready || running)) ||
+                    (index === 3 && changed)
+                  }
+                  onClick={() => setStep(index as EditingStep)}
+                >
+                  <span
+                    className={
+                      complete ? 'step-number complete' : 'step-number'
+                    }
+                  >
+                    {complete ? <Check size={15} /> : index + 1}
+                  </span>
+                  <span>{label}</span>
+                </button>
+              );
+            })}
+          </nav>
+          <div
+            className="automation-step-panel"
+            role="region"
+            aria-label={`${editingSteps[step]} step`}
+          >
+            {(error || job?.error) && (
+              <p role="alert" className="inline-error">
+                {error || job?.error}
+              </p>
+            )}
+            {connection && (
+              <p role="status" className="muted small">
+                {connection}
+              </p>
+            )}
+            {step === 0 && (
               <>
-                <Slider
-                  label="Highlight length"
-                  min={15}
-                  max={90}
-                  step={5}
-                  value={options.clip_seconds}
-                  suffix="s"
-                  onChange={(clip_seconds) => update({ clip_seconds })}
+                <div className="step-introduction">
+                  <h3>1. Choose your sound and editing style</h3>
+                  <p>
+                    Review your settings, then click Auto edit to clean your
+                    voice and create a draft. Your originals stay intact.
+                  </p>
+                </div>
+                <AutomationSettings
+                  options={options}
+                  caps={caps}
+                  microphone={!!project.microphone}
+                  disabled={running}
+                  onChange={update}
                 />
+                <div className="automation-actions step-actions">
+                  <Button disabled={running} onClick={() => void run('plan')}>
+                    <Sparkles size={15} />
+                    Auto edit
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    disabled={running}
+                    onClick={() => void run('render')}
+                  >
+                    Export current timeline to MP4
+                  </Button>
+                  {running && (
+                    <Button variant="secondary" onClick={() => setStep(1)}>
+                      View progress
+                    </Button>
+                  )}
+                </div>
+              </>
+            )}
+            {step === 1 && (
+              <>
+                <div className="step-introduction">
+                  <h3>2. Follow your edit as it happens</h3>
+                  <p>
+                    Each stage below reflects the local worker. You can listen
+                    once voice cleanup finishes.
+                  </p>
+                </div>
+                <ol
+                  className="processing-checklist"
+                  aria-label="Processing stages"
+                >
+                  {processingLabels.map((label, index) => (
+                    <li
+                      key={label}
+                      className={
+                        stage > index
+                          ? 'done'
+                          : stage === index
+                          ? 'current'
+                          : ''
+                      }
+                      aria-current={stage === index ? 'step' : undefined}
+                    >
+                      <span>
+                        {stage > index ? (
+                          <Check size={16} />
+                        ) : stage === index && running ? (
+                          <LoaderCircle size={16} className="spin" />
+                        ) : (
+                          index + 1
+                        )}
+                      </span>
+                      <div>
+                        <strong>
+                          {index === 3 && job?.options.action === 'render'
+                            ? 'Use reviewed timeline'
+                            : label}
+                        </strong>
+                        {stage === index && (
+                          <small>
+                            {upload !== undefined
+                              ? 'Saving original files to this Mac'
+                              : job?.stage}
+                          </small>
+                        )}
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+                {running && (
+                  <div className="pipeline-progress" role="status">
+                    <span>
+                      {upload !== undefined
+                        ? 'Saving originals'
+                        : 'Current stage'}
+                    </span>
+                    {upload !== undefined || job?.progress != null ? (
+                      <>
+                        <progress
+                          max={100}
+                          value={
+                            upload !== undefined
+                              ? upload * 100
+                              : job?.progress || 0
+                          }
+                        />
+                        <span>
+                          {Math.round(
+                            upload !== undefined
+                              ? upload * 100
+                              : job?.progress || 0
+                          )}
+                          %
+                        </span>
+                      </>
+                    ) : (
+                      <span>Working…</span>
+                    )}
+                  </div>
+                )}
+                {audioReady(job) && job && <AudioComparison job={job} />}
+                <div className="automation-actions step-actions">
+                  {running ? (
+                    <Button variant="destructive" onClick={() => void cancel()}>
+                      <X size={15} />
+                      Cancel processing
+                    </Button>
+                  ) : ready ? (
+                    <Button onClick={() => setStep(2)}>
+                      Next: review your video
+                    </Button>
+                  ) : (
+                    <Button onClick={() => setStep(0)}>Back to settings</Button>
+                  )}
+                </div>
                 <p className="inspector-footnote">
-                  Selects a range around your first Important marker, or the
-                  beginning when there is no marker. Review the range; this is
-                  not semantic highlight detection.
+                  If your voice sounds thin or distorted, cancel and retry with
+                  Light or a lower cleanup amount. Previous finished versions
+                  are kept.
                 </p>
               </>
             )}
-            <Slider
-              label="Minimum silence"
-              min={0.5}
-              max={5}
-              step={0.1}
-              value={options.minimum_silence}
-              suffix="s"
-              onChange={(minimum_silence) => update({ minimum_silence })}
-            />
-            <Slider
-              label="Speech padding"
-              min={0.1}
-              max={0.8}
-              step={0.05}
-              value={options.speech_padding}
-              suffix="s"
-              onChange={(speech_padding) => update({ speech_padding })}
-            />
-            <Toggle
-              label="Normalize voice loudness"
-              checked={options.normalize}
-              disabled={running}
-              onChange={(normalize) => update({ normalize })}
-            />
-            <Toggle
-              label="Apply pause cuts to initial draft"
-              checked={options.accept_silence}
-              disabled={running}
-              onChange={(accept_silence) => update({ accept_silence })}
-            />
-            <Toggle
-              label="Offline Khmer / English captions"
-              description={
-                caps?.whisper
-                  ? 'Local model ready. Drafts require review.'
-                  : 'Install an offline Whisper model to enable transcription.'
-              }
-              checked={options.transcribe}
-              disabled={running || !caps?.whisper}
-              onChange={(transcribe) => update({ transcribe })}
-            />
-            <Field label="Transcription language">
-              <select
-                value={options.language}
-                disabled={running || !caps?.whisper}
-                onChange={(e) =>
-                  update({
-                    language: e.target.value as PipelineOptions['language'],
-                  })
-                }
-              >
-                <option value="km">Khmer</option>
-                <option value="en">English</option>
-                <option value="auto">Detect language</option>
-              </select>
-            </Field>
-            {caps && !caps.subtitle_burn && (
-              <p className="pipeline-warning">
-                This FFmpeg build cannot burn text overlays. MP4 editing works;
-                use SRT or the browser export for text overlays.
-              </p>
-            )}
-            <div className="automation-actions">
-              <Button disabled={running} onClick={() => void run('plan')}>
-                <Sparkles size={15} /> Create automatic draft
-              </Button>
-              <Button
-                variant="secondary"
-                disabled={running}
-                onClick={() => void run('render')}
-              >
-                <Download size={15} /> Export current timeline to MP4
-              </Button>
-              {project.processing?.jobId && (
-                <Button
-                  variant="ghost"
-                  disabled={running}
-                  onClick={() => void saveTimeline()}
-                >
-                  Save timeline on Mac
-                </Button>
-              )}
-              {running && (
-                <Button variant="destructive" onClick={() => void cancel()}>
-                  <X size={15} /> Cancel
-                </Button>
-              )}
-            </div>
-            <p className="inspector-footnote">
-              Only this Mac’s localhost service receives media. Original files
-              and previous results are preserved. No cursor positions or clicks
-              from other desktop apps are inferred. Noise cleanup cannot
-              reliably remove all competing voices, animals, or room echo.
-            </p>
-          </div>
-          <div className="automation-review">
-            {running && (
-              <div className="pipeline-progress" role="status">
-                <LoaderCircle className="spin" size={17} />
-                <span>
-                  {upload !== undefined
-                    ? 'Saving originals to this Mac'
-                    : job?.stage}
-                </span>
-                {(upload !== undefined || job?.progress != null) && (
-                  <>
-                    <progress
-                      max={100}
-                      value={
-                        upload !== undefined ? upload * 100 : job?.progress || 0
+            {step === 2 && ready && result && job && (
+              <>
+                <div className="step-introduction">
+                  <h3>3. Listen, watch and review cuts</h3>
+                  <p>
+                    This preview is the last rendered draft. Adjust the proposed
+                    cuts below, then export to include your changes.
+                  </p>
+                </div>
+                <div className="guided-review-layout">
+                  <div className="automation-review">
+                    <div
+                      className="segmented"
+                      role="group"
+                      aria-label="Video comparison source"
+                    >
+                      <button
+                        aria-pressed={preview === 'processed'}
+                        className={preview === 'processed' ? 'active' : ''}
+                        onClick={() => setPreview('processed')}
+                      >
+                        Edited preview
+                      </button>
+                      <button
+                        aria-pressed={preview === 'original'}
+                        className={preview === 'original' ? 'active' : ''}
+                        onClick={() => setPreview('original')}
+                      >
+                        Original
+                      </button>
+                    </div>
+                    <video
+                      key={`${job.id}-${preview}`}
+                      controls
+                      playsInline
+                      preload="metadata"
+                      src={
+                        preview === 'processed'
+                          ? result.video_url
+                          : `/api/studio/projects/${project.id}/assets/screen`
+                      }
+                      aria-label={
+                        preview === 'processed'
+                          ? 'Automatic edited preview'
+                          : 'Original unedited preview'
                       }
                     />
-                    <span>
-                      {Math.round(
-                        upload !== undefined ? upload * 100 : job?.progress || 0
-                      )}
-                      %
-                    </span>
-                  </>
-                )}
-              </div>
-            )}
-            {connection && <p className="muted small">{connection}</p>}
-            {error && (
-              <p role="alert" className="inline-error">
-                {error}
-              </p>
-            )}
-            {job?.error && (
-              <p role="alert" className="inline-error">
-                {job.error}
-              </p>
-            )}
-            {!job && !running && (
-              <div className="automatic-empty">
-                <Sparkles size={27} />
-                <h3>Your first cut, taken care of.</h3>
-                <p>
-                  Save originals → clean audio → detect pauses → compose →
-                  review. Start the local service with{' '}
-                  <code>npm run dev:all</code>.
-                </p>
-              </div>
-            )}
-            {job?.result && (
-              <>
-                <div className="segmented">
-                  <button
-                    className={preview === 'processed' ? 'active' : ''}
-                    onClick={() => setPreview('processed')}
-                  >
-                    Edited preview
-                  </button>
-                  <button
-                    className={preview === 'original' ? 'active' : ''}
-                    onClick={() => setPreview('original')}
-                  >
-                    Original
-                  </button>
-                </div>
-                <video
-                  controls
-                  playsInline
-                  preload="metadata"
-                  src={
-                    preview === 'processed'
-                      ? job.result.video_url
-                      : `/api/studio/projects/${project.id}/assets/screen`
-                  }
-                  aria-label={
-                    preview === 'processed'
-                      ? 'Automatic edited preview'
-                      : 'Original unedited preview'
-                  }
-                />
-                <div className="automatic-result-meta">
-                  <span>
-                    {formatTime(job.result.duration)} · {job.result.width} ×{' '}
-                    {job.result.height} · {bytes(job.result.bytes)}
-                  </span>
-                  <a
-                    href={job.result.video_url}
-                    download={`${project.title}-edited.mp4`}
-                  >
-                    <Download size={14} /> Download MP4
-                  </a>
-                </div>
-                <details>
-                  <summary>Compare original and cleaned audio</summary>
-                  <label className="field">
-                    Original audio
-                    <audio
-                      controls
-                      preload="none"
-                      src={`/api/studio/jobs/${job.id}/files/original_audio`}
-                    />
-                  </label>
-                  <label className="field">
-                    Cleaned audio
-                    <audio
-                      controls
-                      preload="none"
-                      src={`/api/studio/jobs/${job.id}/files/cleaned_audio`}
-                    />
-                  </label>
-                </details>
-                {job.result.warnings.map((warning, i) => (
-                  <p className="pipeline-warning" key={i}>
-                    {warning}
-                  </p>
-                ))}
-                {draft && (
-                  <>
-                    <h3>Review suggested cuts</h3>
+                    <p className="automatic-result-meta">
+                      {formatTime(result.duration)} · {result.width} ×{' '}
+                      {result.height} · {bytes(result.bytes)}
+                    </p>
+                    <AudioComparison job={job} />
+                  </div>
+                  <div className="review-cuts-panel">
+                    <h3>Suggested cuts</h3>
+                    <p className="muted small">
+                      Uncheck a region to keep it in your lesson.
+                    </p>
                     <div className="draft-cuts">
-                      {draft.cuts.length ? (
-                        draft.cuts.map((c) => (
-                          <label key={c.id}>
+                      {draft?.cuts.length ? (
+                        draft.cuts.map((cut) => (
+                          <label key={cut.id}>
                             <input
                               type="checkbox"
-                              checked={c.accepted}
-                              onChange={(e) =>
+                              checked={cut.accepted}
+                              onChange={(event) =>
                                 setDraft({
                                   ...draft,
                                   cuts: draft.cuts.map((item) =>
-                                    item.id === c.id
-                                      ? { ...item, accepted: e.target.checked }
+                                    item.id === cut.id
+                                      ? {
+                                          ...item,
+                                          accepted: event.target.checked,
+                                        }
                                       : item
                                   ),
                                 })
                               }
                             />
                             <span>
-                              {formatTime(c.start)} – {formatTime(c.end)}
+                              {formatTime(cut.start)} – {formatTime(cut.end)}
                             </span>
                             <small>
-                              {c.reason} · {(c.end - c.start).toFixed(1)}s
+                              {cut.reason} · {(cut.end - cut.start).toFixed(1)}s
                             </small>
                           </label>
                         ))
@@ -618,27 +579,126 @@ export function AutomaticEditor({
                         </p>
                       )}
                     </div>
-                    <Button variant="secondary" onClick={() => apply(draft)}>
-                      <Check size={14} /> Apply reviewed draft to timeline
-                    </Button>
-                    <p className="inspector-footnote">
-                      Uncheck a cut to restore it, then apply and export the
-                      current timeline. Undo restores the previous edits. This
-                      preview shows the last rendered draft.
-                    </p>
-                  </>
-                )}
-                <div className="automation-actions">
-                  <a href={job.result.edl_url} download>
-                    Download EDL
-                  </a>
-                  {!!job.result.edl.captions.length && (
-                    <a href={job.result.srt_url} download>
-                      Download SRT
-                    </a>
-                  )}
+                    {draft && (
+                      <Button
+                        variant="secondary"
+                        onClick={() =>
+                          apply({
+                            ...toEDL(latest.current.project),
+                            cuts: draft.cuts,
+                          })
+                        }
+                      >
+                        <Check size={14} />
+                        Apply reviewed cuts to timeline
+                      </Button>
+                    )}
+                    {changed && (
+                      <p className="pipeline-warning">
+                        Your cut choices changed. Export the reviewed video to
+                        update the preview and download.
+                      </p>
+                    )}
+                    <div className="automation-actions">
+                      <Button
+                        variant={changed ? 'default' : 'secondary'}
+                        disabled={running}
+                        onClick={() => void exportReviewed()}
+                      >
+                        Export reviewed video
+                      </Button>
+                      {project.processing?.jobId && (
+                        <Button
+                          variant="ghost"
+                          onClick={() =>
+                            void saveTimeline(
+                              draft
+                                ? {
+                                    ...toEDL(latest.current.project),
+                                    cuts: draft.cuts,
+                                  }
+                                : undefined
+                            )
+                          }
+                        >
+                          Save timeline on Mac
+                        </Button>
+                      )}
+                    </div>
+                    {result.warnings.map((warning, index) => (
+                      <p className="pipeline-warning" key={index}>
+                        {warning}
+                      </p>
+                    ))}
+                    {caps && !caps.subtitle_burn && (
+                      <p className="inspector-footnote">
+                        MP4 text overlays require a libass-capable FFmpeg. Use
+                        SRT or browser export for captions when unavailable.
+                      </p>
+                    )}
+                  </div>
+                </div>
+                <div className="automation-actions step-actions">
+                  <Button variant="secondary" onClick={() => setStep(0)}>
+                    Adjust cleanup settings
+                  </Button>
+                  <Button disabled={changed} onClick={() => setStep(3)}>
+                    Next: download video
+                  </Button>
                 </div>
               </>
+            )}
+            {step === 3 && ready && result && (
+              <div className="finished-video-step">
+                <span className="finished-check">
+                  <Check size={24} />
+                </span>
+                <h3>4. Your edited video is ready</h3>
+                <p>{project.title}</p>
+                <p className="automatic-result-meta">
+                  {formatTime(result.duration)} · {result.width} ×{' '}
+                  {result.height} · {bytes(result.bytes)}
+                </p>
+                <div className="automation-actions">
+                  <Button asChild>
+                    <a
+                      href={result.video_url}
+                      download={
+                        result.file_name || `${project.title}-edited.mp4`
+                      }
+                    >
+                      <Download size={16} />
+                      Download MP4
+                    </a>
+                  </Button>
+                  <Button variant="secondary" onClick={() => setStep(2)}>
+                    <Play size={15} />
+                    Review again
+                  </Button>
+                </div>
+                {result.library_path && (
+                  <p className="recording-file-location">
+                    Saved on your Mac: <strong>{result.library_path}</strong>
+                  </p>
+                )}
+                <p className="inspector-footnote">
+                  Find this version again under All projects → Edited videos.
+                  Creating another edit keeps this one.
+                </p>
+                <div className="automation-actions">
+                  <a href={result.edl_url} download>
+                    Download edit decisions
+                  </a>
+                  {!!result.edl.captions.length && (
+                    <a href={result.srt_url} download>
+                      Download subtitles (SRT)
+                    </a>
+                  )}
+                  <button className="subtle-button" onClick={() => setStep(0)}>
+                    Create another version
+                  </button>
+                </div>
+              </div>
             )}
           </div>
         </div>

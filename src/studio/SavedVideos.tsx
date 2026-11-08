@@ -52,7 +52,17 @@ export function SavedVideos({
     setUrl('');
     setError('');
     setLoading(!!asset);
-    try { if (asset && localMediaURL(asset)) { setUrl(localMediaURL(asset)!); setLoading(false); return; } } catch(error) { setError((error as Error).message); setLoading(false); return; }
+    try {
+      if (asset && localMediaURL(asset)) {
+        setUrl(localMediaURL(asset)!);
+        setLoading(false);
+        return;
+      }
+    } catch (error) {
+      setError((error as Error).message);
+      setLoading(false);
+      return;
+    }
     if (asset)
       void assetBlob(asset)
         .then((blob) => {
@@ -198,9 +208,21 @@ export function SavedVideos({
           )}
         </div>
         <p className="storage-location">
-          Saved in this Chrome profile at{' '}
-          <strong>{window.location.origin}</strong>. Downloads go to your
-          browser’s chosen download folder.
+          {tab === 'edited' && exported?.libraryPath ? (
+            <>
+              Saved on your Mac:{' '}
+              <strong className="recording-file-location">
+                {exported.libraryPath}
+              </strong>
+              .
+            </>
+          ) : (
+            <>
+              Saved in this Chrome profile at{' '}
+              <strong>{window.location.origin}</strong>.
+            </>
+          )}{' '}
+          Downloads go to your browser’s chosen download folder.
         </p>
       </section>
     </div>

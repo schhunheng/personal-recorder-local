@@ -37,6 +37,8 @@ import {
   listExports,
 } from './storage';
 import { SavedVideos } from './SavedVideos';
+import { archiveBrowserExport } from './pipeline';
+import { watermarkColor } from './compositor';
 import { CameraSettings } from './CameraSettings';
 import { CaptionEditor } from './CaptionEditor';
 import { AutomaticEditor } from './AutomaticEditor';
@@ -235,10 +237,28 @@ export default function Editor({ onBack }: { onBack: () => void }) {
         controller.current.signal,
         setProgress
       );
+      const exportId = crypto.randomUUID();
+      let archived: Awaited<ReturnType<typeof archiveBrowserExport>>;
+      let archiveWarning = '';
+      try {
+        archived = await archiveBrowserExport(
+          snapshot,
+          asset,
+          exportId,
+          controller.current.signal
+        );
+      } catch (error) {
+        archiveWarning =
+          'Video exported in this browser. Could not also save it to Recordings: ' +
+          (error as Error).message;
+      }
       const record: SavedExport = {
-        id: crypto.randomUUID(),
+        id: exportId,
         projectId: snapshot.id,
-        title: `${snapshot.title}-edited.${snapshot.edits.export.format}`,
+        title:
+          archived?.file_name ||
+          `${snapshot.title}-edited.${snapshot.edits.export.format}`,
+        libraryPath: archived?.library_path,
         created: Date.now(),
         duration: editedDuration(snapshot.edits),
         asset,
@@ -246,6 +266,7 @@ export default function Editor({ onBack }: { onBack: () => void }) {
       };
       try {
         await saveExport(record);
+        if (archiveWarning) setError(archiveWarning);
       } catch (error) {
         await deleteAsset(asset).catch(() => {});
         throw error;
@@ -574,6 +595,10 @@ export default function Editor({ onBack }: { onBack: () => void }) {
                 checked={p.edits.audio.enabled}
                 onChange={(enabled) => update('audio', { enabled })}
               />
+              <p className="inspector-footnote">
+                For neural noise cancellation, open Automatic editor → Settings.
+                Choose a speech model, then compare the cleaned voice in Review.
+              </p>
               <Slider
                 label="Noise reduction"
                 value={p.edits.audio.strength}
@@ -765,13 +790,38 @@ export default function Editor({ onBack }: { onBack: () => void }) {
                 </select>
               </Field>
               <Slider
-                label="Screen padding"
-                value={p.edits.appearance.padding}
+                label="Horizontal padding"
+                value={
+                  (p.edits.appearance.paddingX ?? p.edits.appearance.padding) *
+                  100
+                }
                 min={0}
-                max={0.18}
-                step={0.005}
-                onChange={(padding) => update('appearance', { padding })}
+                max={20}
+                step={0.5}
+                suffix="%"
+                onChange={(value) =>
+                  update('appearance', { paddingX: value / 100 })
+                }
               />
+              <Slider
+                label="Vertical padding"
+                value={
+                  (p.edits.appearance.paddingY ?? p.edits.appearance.padding) *
+                  100
+                }
+                min={0}
+                max={20}
+                step={0.5}
+                suffix="%"
+                onChange={(value) =>
+                  update('appearance', { paddingY: value / 100 })
+                }
+              />
+              <p className="inspector-footnote">
+                Horizontal adds left/right space; vertical adds top/bottom
+                space. Extra space may remain to keep your recording’s
+                proportions.
+              </p>
               <Slider
                 label="Corner radius"
                 value={p.edits.appearance.radius}
@@ -789,6 +839,56 @@ export default function Editor({ onBack }: { onBack: () => void }) {
                 checked={p.edits.appearance.watermark}
                 onChange={(watermark) => update('appearance', { watermark })}
               />
+              {p.edits.appearance.watermark && (
+                <>
+                  <Field label="Watermark color">
+                    <select
+                      value={
+                        !p.edits.appearance.watermarkColor ||
+                        p.edits.appearance.watermarkColor === 'auto'
+                          ? 'auto'
+                          : 'custom'
+                      }
+                      onChange={(event) =>
+                        update('appearance', {
+                          watermarkColor:
+                            event.target.value === 'auto'
+                              ? 'auto'
+                              : watermarkColor(p.edits.appearance),
+                        })
+                      }
+                    >
+                      <option value="auto">
+                        Automatic · contrast with background
+                      </option>
+                      <option value="custom">Custom color</option>
+                    </select>
+                  </Field>
+                  <Field
+                    label={
+                      p.edits.appearance.watermarkColor &&
+                      p.edits.appearance.watermarkColor !== 'auto'
+                        ? 'Custom watermark color'
+                        : 'Automatic watermark color'
+                    }
+                  >
+                    <input
+                      type="color"
+                      value={watermarkColor(p.edits.appearance)}
+                      onChange={(event) =>
+                        update('appearance', {
+                          watermarkColor: event.target.value,
+                        })
+                      }
+                    />
+                  </Field>
+                  <p className="inspector-footnote">
+                    Automatic uses light text on dark backgrounds and dark text
+                    on light backgrounds. A thin contrasting outline keeps it
+                    readable over video.
+                  </p>
+                </>
+              )}
               <Field label="Chapter title">
                 <input
                   value={p.edits.appearance.title}

@@ -162,6 +162,15 @@ try {
       window.fixtureTracks.every((t) => t.readyState === 'ended')
     )
   );
+  // Stopping opens editable settings and waits for the user's Auto edit click.
+  const automaticSettings = page.getByRole('region', { name: 'Settings step' });
+  await automaticSettings.waitFor();
+  assert.ok(
+    await automaticSettings
+      .getByRole('button', { name: 'Auto edit', exact: true })
+      .isEnabled()
+  );
+  assert.equal(await page.getByRole('region', { name: 'Process step' }).count(), 0);
   await page.getByLabel('Project title').fill('Python · integration fixture');
   await page.getByRole('button', { name: 'Camera', exact: true }).click();
   assert.equal(

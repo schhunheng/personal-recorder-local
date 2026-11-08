@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "source_duration": 186.2667185148018,
+  "trim": {
+    "start": 0.0,
+    "end": 186.24979999995233
+  },
+  "cuts": [
+    {
+      "start": 0.0,
+      "end": 2.35,
+      "id": "5eaa9b1c-ff8f-4d39-8647-9d9b90bd3ba0",
+      "reason": "silence",
+      "accepted": true
+    },
+    {
+      "start": 35.199999999999996,
+      "end": 36.45,
+      "id": "758984e0-a850-4ce8-af2b-506d7bdeab87",
+      "reason": "silence",
+      "accepted": true
+    },
+    {
+      "start": 68.14999999999999,
+      "end": 69.55,
+      "id": "a85d79d9-0a01-4569-a775-f99f315cb001",
+      "reason": "silence",
+      "accepted": true
+    },
+    {
+      "start": 97.39999999999999,
+      "end": 100.3,
+      "id": "41044c5f-0046-4039-8b38-03f0cf92ecc5",
+      "reason": "silence",
+      "accepted": true
+    },
+    {
+      "start": 134.75,
+      "end": 136.79999999999998,
+      "id": "6981fd46-307d-417e-92a2-5d96ff9c4e40",
+      "reason": "silence",
+      "accepted": true
+    },
+    {
+      "start": 140.4,
+      "end": 141.54999999999998,
+      "id": "1fd78ab9-ea08-4e13-aa16-fd4dad00e58d",
+      "reason": "silence",
+      "accepted": true
+    },
+    {
+      "start": 164.20000000000002,
+      "end": 167.39999999999998,
+      "id": "9f973703-ac5d-43f2-94e3-cfcc0f477c8b",
+      "reason": "silence",
+      "accepted": true
+    },
+    {
+      "start": 172.85000000000002,
+      "end": 175.2,
+      "id": "12045bbd-68ab-4f6d-8c9f-770565a9b5d0",
+      "reason": "silence",
+      "accepted": true
+    },
+    {
+      "start": 180.70000000000002,
+      "end": 186.2667185148018,
+      "id": "c8f2bd30-9b80-4ed9-bd6d-af92138deb74",
+      "reason": "silence",
+      "accepted": true
+    }
+  ],
+  "zooms": [],
+  "camera": {
+    "visible": true,
+    "shape": "circle",
+    "size": 0.2,
+    "x": 0.06909036849772979,
+    "y": 0.8601320230948463,
+    "mirror": true,
+    "opacity": 1.0,
+    "border": true,
+    "shadow": true
+  },
+  "appearance": {
+    "background": "#182b29",
+    "padding": 0.045,
+    "paddingX": null,
+    "paddingY": null,
+    "radius": 16.0,
+    "shadow": true,
+    "ratio": "16:9",
+    "watermark": false,
+    "watermarkColor": "auto",
+    "title": "",
+    "intro": false,
+    "outro": false
+  },
+  "captions": [],
+  "caption_style": {
+    "font": "Khmer Sangam MN",
+    "size": 42,
+    "position": "bottom",
+    "animation": "none",
+    "burn": false
+  },
+  "chapters": []
+}

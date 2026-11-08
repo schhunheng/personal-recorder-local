@@ -11,7 +11,8 @@
     "test:browser": "node tests/studio-browser.mjs",
     "dev:all": "node scripts/dev.mjs",
     "dev:api": ".venv/bin/python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8001",
-    "test:api": ".venv/bin/python -m pytest backend/tests -q"
+    "test:api": ".venv/bin/python -m pytest backend/tests -q",
+    "recordings:organize": ".venv/bin/python scripts/organize-recordings.py"
   },
   "dependencies": {
     "react": "19.2.0",
@@ -26,7 +27,7 @@
     "zustand": "5.0.14"
   },
   "optionalDependencies": {
-    "@jitsi/rnnoise-wasm": "^0.2.1"
+    "@jitsi/rnnoise-wasm": "0.2.1"
   },
   "devDependencies": {
     "@types/react": "19.2.14",

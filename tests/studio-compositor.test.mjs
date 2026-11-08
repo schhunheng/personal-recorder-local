@@ -24,7 +24,9 @@ const compositorURL = url(
   )
 );
 const { defaultEdits } = await import(modelURL),
-  { drawFrame, screenBounds } = await import(compositorURL);
+  { drawFrame, screenBounds, contrastColor, watermarkColor } = await import(
+    compositorURL
+  );
 function context() {
   const calls = [];
   return new Proxy(
@@ -98,5 +100,42 @@ test('hiding an overlay removes it from rendered frames and showing it restores 
   assert.deepEqual(
     visible.calls.find((c) => c[0] === 'translate'),
     ['translate', 1920 * 0.15 - radius, 1080 * 0.2 - radius]
+  );
+});
+test('horizontal and vertical padding are independent and legacy projects keep their framing', () => {
+  const edits = defaultEdits(10),
+    screen = { videoWidth: 1920, videoHeight: 1080 };
+  const old = screenBounds(screen, edits, 1920, 1080);
+  edits.appearance.paddingX = edits.appearance.padding;
+  edits.appearance.paddingY = edits.appearance.padding;
+  assert.deepEqual(screenBounds(screen, edits, 1920, 1080), old);
+  edits.appearance.padding = 0;
+  edits.appearance.paddingX = 0.2;
+  edits.appearance.paddingY = 0;
+  const horizontal = screenBounds(screen, edits, 1920, 1080);
+  assert.equal(horizontal.x, 216);
+  assert.ok(Math.abs(horizontal.w / horizontal.h - 16 / 9) < 1e-8);
+  edits.appearance.paddingX = 0;
+  edits.appearance.paddingY = 0.2;
+  const vertical = screenBounds(screen, edits, 1920, 1080);
+  assert.equal(vertical.y, 216);
+  assert.notEqual(horizontal.w, vertical.w);
+  assert.equal(edits.appearance.paddingX, 0);
+});
+test('watermark contrast follows the background and custom colors reach the rendered text', () => {
+  for (const color of ['#000000', '#182b29', '#191c2c'])
+    assert.equal(contrastColor(color), '#ffffff');
+  for (const color of ['#ffffff', '#e5e7de', '#eeeeee'])
+    assert.equal(contrastColor(color), '#000000');
+  const edits = defaultEdits(10);
+  edits.appearance.background = '#ffffff';
+  edits.appearance.watermark = true;
+  assert.equal(watermarkColor(edits.appearance), '#000000');
+  edits.appearance.watermarkColor = '#f43f5e';
+  const ctx = context();
+  drawFrame(ctx, { readyState: 0 }, undefined, edits, 0, 1920, 1080);
+  assert.ok(ctx.calls.some((c) => c[0] === 'fillStyle' && c[1] === '#f43f5e'));
+  assert.ok(
+    ctx.calls.some((c) => c[0] === 'strokeText' && c[1] === 'REANCODE101')
   );
 });

@@ -34,10 +34,13 @@ export type Edits = {
   appearance: {
     background: string;
     padding: number;
+    paddingX?: number | null;
+    paddingY?: number | null;
     radius: number;
     shadow: boolean;
     ratio: '16:9' | '1:1' | '9:16';
     watermark: boolean;
+    watermarkColor?: string;
     title: string;
     intro: boolean;
     outro: boolean;
@@ -60,6 +63,7 @@ export type SavedExport = {
   id: string;
   projectId: string;
   title: string;
+  libraryPath?: string;
   created: number;
   duration: number;
   asset: Asset;
@@ -106,6 +110,7 @@ export type Project = {
     sampleRate?: number;
   };
   processing?: {
+    // Open automatic editing settings; processing starts only after a click.
     requested?: boolean;
     timelineVersion?: number;
     jobId?: string;
@@ -168,6 +173,7 @@ export function defaultEdits(duration: number): Edits {
       shadow: true,
       ratio: '16:9',
       watermark: false,
+      watermarkColor: 'auto',
       title: '',
       intro: false,
       outro: false,

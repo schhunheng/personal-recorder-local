@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "id": "ac88d27e-0081-4b8c-b168-94ac37ed7fd9",
+  "title": "ok-if-elif-else",
+  "originals": {
+    "screen": {
+      "file": "ok-if-elif-else-ac88d27e-0081-4b8c-b168-94ac37ed7fd9.mp4",
+      "bytes": 287097902,
+      "sha256": "d5c6774cf2afa256b307a098f153eff890142418f19afb99ecb8a965169b6c29"
+    }
+  },
+  "edits": [
+    {
+      "id": "5a2d5def-c368-4fb6-ac2e-15e8c9b4417e",
+      "version": 1,
+      "file": "edit1-ac88d27e-0081-4b8c-b168-94ac37ed7fd9.mp4",
+      "bytes": 34991806,
+      "sha256": "8cc92950dafcef2c5862701e81261f33705153bb05a39a5f220236bbe16db305",
+      "created": 1794061908.290593
+    }
+  ]
+}

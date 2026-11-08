@@ -3,6 +3,7 @@ import json
 import shutil
 import subprocess
 import time
+from pathlib import Path
 from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
@@ -45,6 +46,8 @@ def test_automatic_local_pipeline_real_media_and_durable_outputs(tmp_path):
         assert client.put(f'/api/studio/projects/{pid}/assets/camera',content=camera.read_bytes(),headers={'Content-Type':'video/webm'}).status_code==200
         result=client.post(f'/api/studio/projects/{pid}/process',json={'preset':'professional','noise':'off','normalize':False,'vad':'energy','height':360,'minimum_silence':1.5,'speech_padding':.3,'edl':{'source_duration':6,'trim':{'start':0,'end':6},'camera':{'x':.16,'y':.22}}}).json()
         done=wait(client,result['id']);assert done['status']=='completed',done
+        assert done['result']['file_name']==f'edit1-{pid}.mp4'
+        assert (config.data_dir/'Recordings'/pid/f'edit1-{pid}.mp4').is_file()
         assert done['result']['vad_engine']=='energy';cuts=done['result']['edl']['cuts'];assert len(cuts)==1,cuts
         assert 3.3<done['result']['duration']<4.0,done
         video=client.get(done['result']['video_url']).content; output=tmp_path/'result.mp4';output.write_bytes(video)
@@ -63,6 +66,8 @@ def test_automatic_local_pipeline_real_media_and_durable_outputs(tmp_path):
         edl=done['result']['edl'];edl['cuts'][0]['accepted']=False;edl['camera']['visible']=False
         again=client.post(f'/api/studio/projects/{pid}/process',json={'action':'render','edl':edl,'noise':'off','normalize':False,'vad':'energy','height':360}).json()
         restored=wait(client,again['id']);assert restored['status']=='completed',restored
+        assert restored['result']['file_name']==f'edit2-{pid}.mp4'
+        assert (config.data_dir/'Recordings'/pid/f'edit1-{pid}.mp4').read_bytes()==video
         assert restored['result']['duration']>5.8
         hidden=tmp_path/'hidden-camera.mp4';hidden.write_bytes(client.get(restored['result']['video_url']).content)
         raw=subprocess.check_output(['ffmpeg','-v','error','-ss','1','-i',str(hidden),'-vframes','1','-f','rawvideo','-pix_fmt','rgb24','pipe:1'])
@@ -132,6 +137,68 @@ def test_chapters_follow_the_edited_timeline():
     from backend.app.edit_decisions import ffmetadata
     edl=EDL(source_duration=20,trim={'start':0,'end':20},cuts=[{'id':'cut','start':4,'end':8}],chapters=[{'time':0,'title':'Intro'},{'time':10,'title':'Python = variables'}])
     text,present=ffmetadata(edl);assert present and 'START=6000' in text and r'Python \= variables' in text
+
+def test_watermark_colors_and_padding_schema_preserve_old_projects(tmp_path):
+    from backend.app.render import write_ass, contrast_color
+    from pydantic import ValidationError
+    old=EDL(source_duration=2,trim={'start':0,'end':2},appearance={'padding':.1})
+    assert old.appearance.paddingX is None and old.appearance.paddingY is None
+    assert contrast_color('#182b29')=='#ffffff' and contrast_color('#e5e7de')=='#000000'
+    old.appearance.watermark=True;old.appearance.background='#ffffff'
+    path=tmp_path/'watermark.ass';assert write_ass(path,old,1920,1080)
+    text=path.read_text();assert r'\c&H000000&' in text and r'\an3' in text
+    old.appearance.watermarkColor='#123456';write_ass(path,old,1920,1080)
+    assert r'\c&H563412&' in path.read_text()
+    with pytest.raises(ValidationError):
+        EDL(source_duration=2,trim={'start':0,'end':2},appearance={'watermarkColor':'invalid'})
+
+@pytest.mark.skipif(not shutil.which('ffmpeg'),reason='FFmpeg required')
+def test_independent_padding_is_present_in_real_mp4(tmp_path):
+    source=tmp_path/'source.mp4'
+    subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','color=c=red:s=640x360:r=30','-f','lavfi','-i','sine=frequency=250:sample_rate=48000','-t','1','-c:v','libx264','-c:a','aac',str(source)],check=True)
+    pid=str(uuid4());config=Config(data_dir=tmp_path/'data')
+    edl=EDL(source_duration=1,trim={'start':0,'end':1},appearance={'padding':0,'paddingX':.2,'paddingY':0,'background':'#e5e7de','radius':0,'shadow':False})
+    with TestClient(create_app(config)) as client:
+        client.post('/api/studio/projects',json={'id':pid,'title':'Padding','duration':1})
+        client.put(f'/api/studio/projects/{pid}/assets/screen',content=source.read_bytes(),headers={'Content-Type':'video/mp4'})
+        job=client.post(f'/api/studio/projects/{pid}/process',json={'action':'render','edl':edl.model_dump(),'height':360,'noise':'off','normalize':False}).json()
+        done=wait(client,job['id']);assert done['status']=='completed',done
+        output=Path(done['result']['library_path'])
+        raw=subprocess.check_output(['ffmpeg','-v','error','-ss','0.3','-i',str(output),'-vframes','1','-f','rawvideo','-pix_fmt','rgb24','pipe:1'])
+        def pixel(x,y): return raw[(y*640+x)*3:(y*640+x)*3+3]
+        assert pixel(20,180)[1]>200 and pixel(20,180)[2]>200
+        assert pixel(320,180)[0]>200 and pixel(320,180)[1]<50
+
+@pytest.mark.skipif(not shutil.which('ffmpeg'),reason='FFmpeg required')
+def test_microphone_source_alignment_and_neural_video_output(tmp_path):
+    import soundfile as sf
+    import numpy as np
+    source=tmp_path/'screen.mp4';mic=tmp_path/'mic.webm'
+    subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','color=c=blue:s=320x180:r=30','-f','lavfi','-i','sine=frequency=1000:sample_rate=48000','-t','2','-c:v','libx264','-c:a','aac',str(source)],check=True)
+    subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','sine=frequency=250:sample_rate=48000','-t','2','-c:a','libopus',str(mic)],check=True)
+    pid=str(uuid4());config=Config(data_dir=tmp_path/'data')
+    def peak(path):
+        data,rate=sf.read(path);chunk=data[rate//4:rate*3//2]
+        return np.fft.rfftfreq(len(chunk),1/rate)[np.argmax(np.abs(np.fft.rfft(chunk)))]
+    with TestClient(create_app(config)) as client:
+        client.post('/api/studio/projects',json={'id':pid,'title':'Source test','duration':2,'timing':{'trackRoles':{'screen':'screen-id','microphone':'mic-id'},'trackOffsetsMs':{'screen-id':0,'mic-id':100}}})
+        client.put(f'/api/studio/projects/{pid}/assets/screen',content=source.read_bytes(),headers={'Content-Type':'video/mp4'})
+        client.put(f'/api/studio/projects/{pid}/assets/microphone',content=mic.read_bytes(),headers={'Content-Type':'audio/webm'})
+        job=client.post(f'/api/studio/projects/{pid}/process',json={'noise':'off','normalize':False,'height':360,'vad':'energy'}).json()
+        one=wait(client,job['id']);assert one['status']=='completed',one
+        assert one['result']['audio']['source']=='microphone' and one['result']['audio']['source_offset_ms']==100
+        extracted=config.data_dir/'studio'/'jobs'/one['id']/'original-audio.wav'
+        data,rate=sf.read(extracted);assert np.max(np.abs(data[:int(.08*rate)]))<.001
+        assert abs(peak(extracted)-250)<2
+        job=client.post(f'/api/studio/projects/{pid}/process',json={'audio_source':'screen','noise':'balanced','noise_engine':'rnnoise','normalize':False,'height':360,'vad':'energy'}).json()
+        two=wait(client,job['id']);assert two['status']=='completed',two
+        assert two['result']['audio']['source']=='screen'
+        models=client.get('/api/studio/capabilities').json()['audio_engines']
+        expected='rnnoise' if next(e for e in models if e['id']=='rnnoise')['available'] else 'spectral'
+        assert two['result']['audio']['engine']==expected and two['audio_ready']
+        extracted=config.data_dir/'studio'/'jobs'/two['id']/'original-audio.wav'
+        assert abs(peak(extracted)-1000)<2
+        assert client.get(two['result']['video_url']).status_code==200
 
 @pytest.mark.skipif(not shutil.which('ffmpeg'),reason='FFmpeg required')
 def test_cancelled_queued_job_retains_originals_and_can_retry(tmp_path):

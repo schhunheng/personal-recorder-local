@@ -12,3 +12,5 @@ class Config:
     ffmpeg: str = field(default_factory=lambda: os.getenv('EDU_FFMPEG', 'ffmpeg'))
     ffprobe: str = field(default_factory=lambda: os.getenv('EDU_FFPROBE', 'ffprobe'))
     model_dir: str = field(default_factory=lambda: os.getenv('EDU_DF_MODEL_DIR', ''))
+    recordings_dir: Path | None = field(default_factory=lambda: Path(os.environ['EDU_RECORDINGS_DIR']).resolve() if os.getenv('EDU_RECORDINGS_DIR') else None)
+    node: str = field(default_factory=lambda: os.getenv('EDU_NODE', 'node'))

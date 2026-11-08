@@ -13,6 +13,9 @@ export type PipelineOptions = {
   preset: Preset;
   clip_seconds: number;
   noise: 'off' | 'light' | 'balanced' | 'strong' | 'ai';
+  noise_engine?: 'auto' | 'rnnoise' | 'deepfilter' | 'spectral';
+  noise_strength?: number | null;
+  audio_source?: 'auto' | 'microphone' | 'screen';
   normalize: boolean;
   vad: 'auto' | 'silero' | 'energy';
   minimum_silence: number;
@@ -55,6 +58,7 @@ export type LocalJob = {
   stage: string;
   progress: number | null;
   error?: string;
+  audio_ready?: boolean;
   options: PipelineOptions;
   result?: {
     edl: EDL;
@@ -68,6 +72,18 @@ export type LocalJob = {
     video_url: string;
     srt_url: string;
     edl_url: string;
+    file_name?: string;
+    library_path?: string;
+    edit_version?: number;
+    audio?: {
+      engine: string;
+      model: string;
+      source: string;
+      strength: number;
+      gain_db: number;
+      quiet_reduction_db?: number | null;
+      fallback_reason?: string | null;
+    };
   };
 };
 export type PipelineCapabilities = {
@@ -78,11 +94,21 @@ export type PipelineCapabilities = {
   whisper_message: string;
   max_bytes: number;
   max_duration: number;
+  audio_engines?: {
+    id: string;
+    label: string;
+    available: boolean;
+    reason: string;
+  }[];
+  recommended_audio_engine?: string;
 };
 export const defaultPipeline: PipelineOptions = {
   preset: 'clean',
   clip_seconds: 60,
   noise: 'balanced',
+  noise_engine: 'auto',
+  noise_strength: null,
+  audio_source: 'auto',
   normalize: true,
   vad: 'auto',
   minimum_silence: 1.5,
@@ -185,7 +211,14 @@ export async function uploadOriginals(
       title: project.title,
       duration: project.duration,
       markers: project.markers || [],
-      timing: project.timing || {},
+      timing: {
+        ...project.timing,
+        trackRoles: {
+          screen: project.screen.id,
+          microphone: project.microphone?.id,
+          camera: project.camera?.id,
+        },
+      },
     }),
     signal,
   });
@@ -264,6 +297,34 @@ export async function startPipeline(
     ...json(options),
     signal,
   });
+}
+export type ArchivedExport = {
+  id: string;
+  file_name: string;
+  library_path: string;
+  edit_version: number;
+  video_url: string;
+  bytes: number;
+};
+export async function archiveBrowserExport(
+  project: Project,
+  asset: Asset,
+  exportId: string,
+  signal: AbortSignal
+): Promise<ArchivedExport | undefined> {
+  if (!['localhost', '127.0.0.1', '[::1]'].includes(window.location.hostname))
+    return;
+  await uploadOriginals(project, signal, () => {});
+  const blob = await assetBlob(asset);
+  return localRequest<ArchivedExport>(
+    `/projects/${project.id}/exports/${exportId}`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': blob.type.split(';')[0] },
+      body: blob,
+      signal,
+    }
+  );
 }
 export function watchJob(
   id: string,

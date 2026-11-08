@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "source_duration": 759.412792,
+  "trim": {
+    "start": 0.0,
+    "end": 759.412792
+  },
+  "cuts": [],
+  "zooms": [
+    {
+      "id": "26f64ed9-20ea-44f7-a5d6-3fe43bd15262",
+      "time": 0.0,
+      "duration": 0.7,
+      "scale": 1.0,
+      "x": 0.0,
+      "y": 0.25
+    }
+  ],
+  "camera": {
+    "visible": true,
+    "shape": "circle",
+    "size": 0.22,
+    "x": 0.84,
+    "y": 0.78,
+    "mirror": true,
+    "opacity": 1.0,
+    "border": true,
+    "shadow": true
+  },
+  "appearance": {
+    "background": "#e8ff94",
+    "padding": 0.0,
+    "radius": 30.0,
+    "shadow": true,
+    "ratio": "16:9",
+    "watermark": false,
+    "title": "",
+    "intro": false,
+    "outro": false
+  },
+  "captions": [],
+  "caption_style": {
+    "font": "Khmer Sangam MN",
+    "size": 42,
+    "position": "bottom",
+    "animation": "none",
+    "burn": false
+  },
+  "chapters": []
+}

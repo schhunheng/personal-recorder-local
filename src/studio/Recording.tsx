@@ -660,8 +660,8 @@ export default function Recording({
           {!busy && (
             <div className="automatic-recording-options">
               <Toggle
-                label="Automatically edit after recording"
-                description="Save originals to this Mac, clean audio, suggest cuts, and prepare an MP4."
+                label="Open editing settings after recording"
+                description="Choose your sound and editing options, then click Auto edit to start processing."
                 checked={automation.enabled}
                 onChange={(enabled) => setAutomation({ enabled })}
               />

@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "id": "b3238abe-fd64-4cc6-85bc-cc781b880557",
+  "title": "2026-11-04_20-32",
+  "originals": {
+    "screen": {
+      "file": "2026-11-04-20-32-b3238abe-fd64-4cc6-85bc-cc781b880557.webm",
+      "bytes": 6945039,
+      "sha256": "5ea3dec4d8bcebda0d894936db4531514b1aae2ab34201d83f3acd6ad8d3f7b5"
+    }
+  },
+  "edits": [
+    {
+      "id": "dc6f035d-b82b-500c-930c-78183e91eb61",
+      "version": 1,
+      "file": "edit1-b3238abe-fd64-4cc6-85bc-cc781b880557.mp4",
+      "bytes": 3681736,
+      "sha256": "662399bcf95ba0b64fd3cb7477b5a05ea481c100e3d29b5fcedd055cb4d396c3",
+      "created": 1793799173.0588496
+    },
+    {
+      "id": "25032859-7bfd-4a53-af6c-1972b0f3d786",
+      "version": 2,
+      "file": "edit2-b3238abe-fd64-4cc6-85bc-cc781b880557.mp4",
+      "bytes": 3277852,
+      "sha256": "20a6d9da9e8fe2f03c39c02e0e21b703c9a1bc0dd7472d28f80f489c5bbca928",
+      "created": 1793979329.039875
+    },
+    {
+      "id": "c27da2e1-775e-4ec3-8fe5-c33739949fdd",
+      "version": 3,
+      "file": "edit3-b3238abe-fd64-4cc6-85bc-cc781b880557.mp4",
+      "bytes": 3227925,
+      "sha256": "d835de31866af7cb38cd8d804d0311cef039da06d5b1ac004ff4470a35cf959a",
+      "created": 1793979539.3439934
+    }
+  ]
+}

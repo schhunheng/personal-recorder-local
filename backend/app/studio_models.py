@@ -49,17 +49,21 @@ class Camera(Schema):
 class Appearance(Schema):
     background: str = '#182b29'
     padding: float = Field(default=.045, ge=0, le=.2)
+    paddingX: float | None = Field(default=None, ge=0, le=.2)
+    paddingY: float | None = Field(default=None, ge=0, le=.2)
     radius: float = Field(default=16, ge=0, le=100)
     shadow: bool = True
     ratio: Literal['16:9', '1:1', '9:16'] = '16:9'
     watermark: bool = False
+    watermarkColor: str = 'auto'
     title: str = Field(default='', max_length=120)
     intro: bool = False
     outro: bool = False
-    @field_validator('background')
+    @field_validator('background', 'watermarkColor')
     @classmethod
-    def color(cls, value):
+    def color(cls, value, info):
         import re
+        if info.field_name == 'watermarkColor' and value == 'auto': return value
         if not re.fullmatch(r'#[0-9a-fA-F]{6}', value): raise ValueError('Use a hex color')
         return value
 
@@ -100,6 +104,9 @@ class PipelineOptions(Schema):
     preset: Literal['clean', 'professional', 'social'] = 'clean'
     clip_seconds: float = Field(default=60, ge=10, le=180)
     noise: Literal['off', 'light', 'balanced', 'strong', 'ai'] = 'balanced'
+    noise_engine: Literal['auto', 'rnnoise', 'deepfilter', 'spectral'] = 'auto'
+    noise_strength: float | None = Field(default=None, ge=0, le=1)
+    audio_source: Literal['auto', 'microphone', 'screen'] = 'auto'
     normalize: bool = True
     vad: Literal['auto', 'silero', 'energy'] = 'auto'
     minimum_silence: float = Field(default=1.5, ge=.5, le=15)

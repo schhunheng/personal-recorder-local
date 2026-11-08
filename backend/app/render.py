@@ -36,6 +36,15 @@ def ass_time(t):
 def ass_text(text):
     return text.replace('\\','\\\\').replace('{','｛').replace('}','｝').replace('\r','').replace('\n',r'\N')
 
+def contrast_color(background):
+    channels=[int(background[i:i+2],16)/255 for i in (1,3,5)]
+    channels=[c/12.92 if c<=.04045 else ((c+.055)/1.055)**2.4 for c in channels]
+    luminance=sum(c*w for c,w in zip(channels,(.2126,.7152,.0722)))
+    return '#ffffff' if 1.05/(luminance+.05)>=(luminance+.05)/.05 else '#000000'
+
+def ass_color(color):
+    return '&H'+color[5:7]+color[3:5]+color[1:3]+'&'
+
 def write_ass(path,edl,width,height):
     style=edl.caption_style; alignment={'bottom':2,'top':8,'center':5}[style.position]
     header=f'''[Script Info]
@@ -59,7 +68,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     if a.title:
         if a.intro: lines.append(f'Dialogue: 1,0:00:00.00,{ass_time(min(3,total))},Title,,0,0,0,,{ass_text(a.title)}')
         if a.outro: lines.append(f'Dialogue: 1,{ass_time(max(0,total-3))},{ass_time(total)},Title,,0,0,0,,{ass_text(a.title)}')
-    if a.watermark: lines.append(f'Dialogue: 1,0:00:00.00,{ass_time(total)},Caption,,0,0,0,,{{\\an9\\fs{max(16,round(18*height/1080))}}}REANCODE101')
+    if a.watermark:
+        color=contrast_color(a.background) if a.watermarkColor=='auto' else a.watermarkColor
+        lines.append(f'Dialogue: 1,0:00:00.00,{ass_time(total)},Caption,,0,0,0,,{{\\an3\\pos({round(width*.975)},{round(height*.965)})\\fs{round(width/80)}\\c{ass_color(color)}\\3c{ass_color(contrast_color(color))}\\bord{max(1,round(width/960))}\\shad0}}REANCODE101')
     path.write_text(header+'\n'.join(lines)+'\n',encoding='utf-8')
     return bool(lines)
 
@@ -69,7 +80,10 @@ def render(jobs,job_id,source,audio,overlay,loop,edl,options,probe,cancel):
     width=options.height if options.profile=='vertical' else round(options.height*16/9/2)*2
     height=round(options.height*16/9/2)*2 if options.profile=='vertical' else options.height
     video=next(s for s in probe['streams'] if s['codec_type']=='video'); sw,sh=video['width'],video['height']
-    pad=round(min(width,height)*edl.appearance.padding); ratio=min((width-2*pad)/sw,(height-2*pad)/sh)
+    appearance=edl.appearance
+    pad_x=round(min(width,height)*(appearance.paddingX if appearance.paddingX is not None else appearance.padding))
+    pad_y=round(min(width,height)*(appearance.paddingY if appearance.paddingY is not None else appearance.padding))
+    ratio=min((width-2*pad_x)/sw,(height-2*pad_y)/sh)
     fw,fh=max(2,round(sw*ratio/2)*2),max(2,round(sh*ratio/2)*2)
     overlay_codec=None
     if overlay:

@@ -11,13 +11,14 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
 from uuid import UUID, uuid4
-import soundfile as sf
-from .audio import Cancelled, check_cancel, ai_status, process_audio
+from .audio import Cancelled, check_cancel
+from .enhancement import cleanup_audio as enhance_voice
 from .jobs import Jobs
 from .studio_models import EDL, PipelineOptions, NewProject
 from .speech import analyze, transcribe, speech_capabilities
 from .edit_decisions import plan_edits, mapped_captions, srt, duration, suggest_chapters
 from .render import render
+from .recording_library import RecordingLibrary, recording_root
 
 RUNNING={'queued','validating','extracting','cleaning','detecting','planning','transcribing','rendering'}
 
@@ -27,6 +28,7 @@ class StudioJobs:
     validate_timeline=Jobs.validate_timeline
     def __init__(self,config):
         self.config=config; self.root=(config.data_dir/'studio').resolve(); self.root.mkdir(parents=True,exist_ok=True)
+        self.library=RecordingLibrary(recording_root(config))
         self.db_path=self.root/'jobs.sqlite3'; self.lock=threading.RLock(); self.cancels={}
         for partial in self.root.glob('*/*.upload.partial'):
             partial.rename(partial.with_name(f'interrupted-{int(time.time())}-{partial.name}'))
@@ -39,6 +41,7 @@ CREATE INDEX IF NOT EXISTS project_jobs ON jobs(project_id,created);
 ''')
             if 'timing' not in {r['name'] for r in db.execute('PRAGMA table_info(projects)')}: db.execute("ALTER TABLE projects ADD COLUMN timing TEXT NOT NULL DEFAULT '{}'")
             db.execute("UPDATE jobs SET status='failed',stage='Interrupted',error='Local service restarted. Original files retained; retry the job.',updated=? WHERE status IN ("+','.join('?' for _ in RUNNING)+')',(time.time(),*RUNNING))
+        self.archive_existing()
     @contextmanager
     def connect(self):
         db=sqlite3.connect(self.db_path,timeout=30); db.row_factory=sqlite3.Row
@@ -72,6 +75,7 @@ CREATE INDEX IF NOT EXISTS project_jobs ON jobs(project_id,created);
         id=str(options.id); folder=self.folder(id); folder.mkdir(exist_ok=True)
         with self.connect() as db:
             db.execute('INSERT OR IGNORE INTO projects(id,title,duration,markers,assets,created,timing) VALUES(?,?,?,?,?,?,?)',(id,options.title,options.duration,json.dumps([m.model_dump() for m in options.markers]),'{}',time.time(),json.dumps(options.timing)))
+            db.execute('UPDATE projects SET title=?,markers=?,timing=? WHERE id=?',(options.title,json.dumps([m.model_dump() for m in options.markers]),json.dumps(options.timing),id))
         return self.project(id)
     def asset(self,id,kind):
         p=self.project(id); info=p['assets'].get(kind)
@@ -81,8 +85,22 @@ CREATE INDEX IF NOT EXISTS project_jobs ON jobs(project_id,created);
         return path
     def register_asset(self,id,kind,path,mime,size,digest,revision=None):
         with self.lock:
-            p=self.project(id); assets=p['assets']; assets[kind]={'file':path.name,'mime':mime,'bytes':size,'sha256':digest,'revision':revision}
+            p=self.project(id)
+            archived=self.library.original(id,p['title'],kind,path,revision,digest)
+            assets=p['assets']; assets[kind]={'file':path.name,'mime':mime,'bytes':size,'sha256':digest,'revision':revision,**self.library.location(id,archived)}
             with self.connect() as db: db.execute('UPDATE projects SET assets=? WHERE id=?',(json.dumps(assets),id))
+    def archive_existing(self):
+        for p in self.projects():
+            for kind,asset in p['assets'].items():
+                path=self.asset(p['id'],kind)
+                if path and path.is_file():
+                    self.register_asset(p['id'],kind,path,asset['mime'],asset['bytes'],asset['sha256'],asset.get('revision'))
+            with self.connect() as db: rows=db.execute("SELECT id FROM jobs WHERE project_id=? AND status='completed' ORDER BY created,id",(p['id'],)).fetchall()
+            for row in rows:
+                job=self.get(row['id']);folder=self.job_folder(job['id']);output=folder/'edited.mp4'
+                if output.is_file() and job['result']:
+                    archived=self.library.edit(p['id'],p['title'],job['id'],output,job['created'],{'edl.json':folder/'edl.json','srt':folder/'captions.srt','chapters.json':folder/'chapters.json'})
+                    self.update(job['id'],result={**job['result'],**self.library.location(p['id'],archived)})
     def update_timeline(self,id,edl,base_version):
         with self.lock, self.connect() as db:
             p=self.project(id)
@@ -94,6 +112,7 @@ CREATE INDEX IF NOT EXISTS project_jobs ON jobs(project_id,created);
         with self.connect() as db: row=db.execute('SELECT * FROM jobs WHERE id=?',(id,)).fetchone()
         if not row: raise KeyError(id)
         value=dict(row); value['options']=json.loads(value['options']); value['result']=json.loads(value['result']) if value['result'] else None
+        value['audio_ready']=value['status'] in ('detecting','planning','transcribing','rendering','completed') and (self.job_folder(id)/'cleaned-audio.wav').is_file()
         return value
     def update(self,id,**changes):
         allowed={'status','stage','progress','result','error'}
@@ -117,22 +136,7 @@ CREATE INDEX IF NOT EXISTS project_jobs ON jobs(project_id,created);
             event=self.cancels.get(id)
             if event: event.set()
     def cleanup_audio(self,source,target,options,cancel,job_id,warnings):
-        level=options.noise
-        if level=='ai':
-            available,reason=ai_status(self.config.model_dir)
-            if available:
-                try: return process_audio(source,target,'ai',.65,cancel,lambda p:self.update(job_id,progress=round(p*100,1)),self.config.model_dir,normalize=options.normalize)
-                except Cancelled: raise
-                except Exception as exc: warnings.append(f'AI enhancement failed; using FFmpeg cleanup. {type(exc).__name__}')
-            else: warnings.append('AI enhancement unavailable; using Balanced FFmpeg cleanup. '+reason)
-            level='balanced'
-        filters=[]
-        if level!='off': filters=['highpass=f=80',f"afftdn=nr={dict(light=6,balanced=12,strong=18)[level]}:nf=-35:tn=1"]
-        if options.normalize: filters.append('loudnorm=I=-16:TP=-1.5:LRA=11')
-        filters.append('alimiter=limit=0.95:level=false')
-        length=sf.info(source).duration
-        self.command([self.config.ffmpeg,'-nostdin','-v','error','-y','-i',str(source),'-af',','.join(filters),'-ar','48000','-ac','1','-c:a','pcm_s24le','-progress','pipe:1',str(target)],cancel,lambda sec:self.update(job_id,progress=round(min(99,sec/max(.1,length)*100),1)))
-        return {'mode':level,'normalized':options.normalize}
+        return enhance_voice(self,source,target,options,cancel,job_id,warnings)
     def run(self,jid,cancel):
         job=self.get(jid); p=self.project(job['project_id']); folder=self.job_folder(jid); options=PipelineOptions.model_validate(job['options']); warnings=[]
         try:
@@ -146,16 +150,30 @@ CREATE INDEX IF NOT EXISTS project_jobs ON jobs(project_id,created);
             with self.lock, self.connect() as db:
                 current=self.project(p['id']); assets=current['assets']; assets['screen'].update(width=video['width'],height=video['height'])
                 db.execute('UPDATE projects SET assets=?,duration=? WHERE id=?',(json.dumps(assets),length,p['id']))
-            audio_source=source if any(s['codec_type']=='audio' for s in probe['streams']) else self.asset(p['id'],'microphone')
+            microphone=self.asset(p['id'],'microphone')
+            if options.audio_source=='microphone' and not microphone: raise ValueError('No independent microphone track is available. Choose Original mix.')
+            use_microphone=bool(microphone and options.audio_source!='screen')
+            audio_source=microphone if use_microphone else source if any(s['codec_type']=='audio' for s in probe['streams']) else None
+            timing=p.get('timing') or {};offsets=timing.get('trackOffsetsMs',{});roles=timing.get('trackRoles',{})
+            delay=0.
+            if use_microphone and roles.get('microphone') in offsets:
+                delay=float(offsets[roles['microphone']])-float(offsets.get(roles.get('screen'),0))
+                if not math.isfinite(delay) or abs(delay)>10000: raise ValueError('Invalid microphone synchronization offset.')
             self.update(jid,status='extracting',stage='Extracting synchronized audio',progress=None)
             extracted=folder/'original-audio.wav'; cleaned=folder/'cleaned-audio.wav'
             args=[self.config.ffmpeg,'-nostdin','-v','error','-y']
-            if audio_source: args+=['-protocol_whitelist','file,pipe','-i',str(audio_source),'-map','0:a:0','-af','aresample=48000:async=1:first_pts=0,apad']
+            if audio_source:
+                filters=['aresample=48000:async=1:first_pts=0']
+                if delay>0: filters.append(f'adelay={delay:.3f}')
+                elif delay<0: filters.extend([f'atrim=start={-delay/1000:.6f}','asetpts=PTS-STARTPTS'])
+                filters.append('apad')
+                args+=['-protocol_whitelist','file,pipe','-i',str(audio_source),'-map','0:a:0','-af',','.join(filters)]
             else:
                 args+=['-f','lavfi','-i','anullsrc=r=48000:cl=mono']; warnings.append('No audio track was captured; the draft uses silence.')
             args+=['-t',str(length),'-ac','1','-ar','48000','-c:a','pcm_s24le',str(extracted)]; self.command(args,cancel)
             self.update(jid,status='cleaning',stage='Cleaning and normalizing audio',progress=0)
             audio_info=self.cleanup_audio(extracted,cleaned,options,cancel,jid,warnings)
+            audio_info.update(source='microphone' if use_microphone else 'screen' if audio_source else 'silence',source_offset_ms=delay)
             self.update(jid,status='detecting',stage='Detecting speech and pauses',progress=0)
             detected=analyze(cleaned,options.vad,options.threshold_db,cancel,lambda value:self.update(jid,progress=round(value*100,1))) if options.action=='plan' else {'speech':[],'waveform':{'levels':[],'step':.05},'engine':'not-needed','warnings':[]}; warnings+=detected['warnings']
             self.update(jid,status='planning',stage='Preparing reversible draft edits',progress=None)
@@ -184,7 +202,10 @@ CREATE INDEX IF NOT EXISTS project_jobs ON jobs(project_id,created);
             v=next((s for s in final['streams'] if s['codec_type']=='video'),{}); a=next((s for s in final['streams'] if s['codec_type']=='audio'),{})
             actual=float(final['format']['duration'])
             if (v.get('width'),v.get('height'))!=(width,height) or v.get('codec_name')!='h264' or a.get('codec_name')!='aac' or abs(actual-duration(edl))>max(.5,len(retained_safe(edl))*.05): raise ValueError('Output codec/duration validation failed. Originals retained.')
+            self.update(jid,stage='Saving edited video to Recordings',progress=None)
+            archived=self.library.edit(p['id'],p['title'],jid,output,job['created'],{'edl.json':folder/'edl.json','srt':folder/'captions.srt','chapters.json':folder/'chapters.json'})
             result={'edl':edl.model_dump(),'waveform':detected['waveform'],'vad_engine':detected['engine'],'warnings':warnings,'audio':audio_info,'text_overlays_burned':text_burned,'bytes':output.stat().st_size,'duration':actual,'width':width,'height':height,'video_url':f'/api/studio/jobs/{jid}/files/video','srt_url':f'/api/studio/jobs/{jid}/files/srt','edl_url':f'/api/studio/jobs/{jid}/files/edl'}
+            result.update(self.library.location(p['id'],archived))
             try: self.update_timeline(p['id'],edl,job['base_version'])
             except ValueError: result['warnings'].append('Manual timeline changed while processing. This draft did not overwrite it.')
             self.update(jid,status='completed',stage='Draft ready to review',progress=100,result=result)

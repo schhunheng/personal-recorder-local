@@ -1,15 +1,37 @@
 import type { Edits } from './model';
 import { zoomAt } from './timeline';
+export function contrastColor(background: string) {
+  const hex = /^#[0-9a-f]{6}$/i.test(background) ? background : '#182b29';
+  const channels = [1, 3, 5].map((index) => {
+    const value = parseInt(hex.slice(index, index + 2), 16) / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  const luminance =
+    channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+  return 1.05 / (luminance + 0.05) >= (luminance + 0.05) / 0.05
+    ? '#ffffff'
+    : '#000000';
+}
+export function watermarkColor(appearance: Edits['appearance']) {
+  return appearance.watermarkColor && appearance.watermarkColor !== 'auto'
+    ? appearance.watermarkColor
+    : contrastColor(appearance.background);
+}
 export function screenBounds(
   video: HTMLVideoElement,
   edits: Edits,
   width: number,
   height: number
 ) {
-  const pad = edits.appearance.padding * Math.min(width, height);
+  const padX =
+    (edits.appearance.paddingX ?? edits.appearance.padding) *
+    Math.min(width, height);
+  const padY =
+    (edits.appearance.paddingY ?? edits.appearance.padding) *
+    Math.min(width, height);
   const scale = Math.min(
-    (width - pad * 2) / (video.videoWidth || width),
-    (height - pad * 2) / (video.videoHeight || height)
+    (width - padX * 2) / (video.videoWidth || width),
+    (height - padY * 2) / (video.videoHeight || height)
   );
   const w = (video.videoWidth || width) * scale,
     h = (video.videoHeight || height) * scale;
@@ -102,10 +124,21 @@ export function drawFrame(
     ctx.restore();
   }
   if (edits.appearance.watermark) {
+    ctx.save();
     ctx.font = `600 ${width / 80}px sans-serif`;
     ctx.textAlign = 'right';
-    ctx.fillStyle = '#ffffffb3';
+    const color = watermarkColor(edits.appearance);
+    ctx.fillStyle = color;
+    ctx.strokeStyle = contrastColor(color);
+    ctx.lineWidth = Math.max(1, width / 960);
+    ctx.lineJoin = 'round';
+    ctx.strokeText(
+      'REANCODE101',
+      width - width * 0.025,
+      height - height * 0.035
+    );
     ctx.fillText('REANCODE101', width - width * 0.025, height - height * 0.035);
+    ctx.restore();
   }
   const { title, intro, outro } = edits.appearance;
   if (

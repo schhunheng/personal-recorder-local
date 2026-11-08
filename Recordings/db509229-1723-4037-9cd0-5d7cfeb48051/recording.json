@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "id": "db509229-1723-4037-9cd0-5d7cfeb48051",
+  "title": "Untitled lesson · 11/7/2026",
+  "originals": {
+    "screen": {
+      "file": "Untitled-lesson-11-7-2026-db509229-1723-4037-9cd0-5d7cfeb48051.webm",
+      "bytes": 21295659,
+      "sha256": "3830be713915fdc4a496c0b5b4c5d4238311d993d9ed59d8e8694ec4c535e09e"
+    },
+    "microphone": {
+      "file": "microphone-db509229-1723-4037-9cd0-5d7cfeb48051.webm",
+      "bytes": 3251503,
+      "sha256": "22f72657e03ebf231c1c06b81ba0399955017c06e074833af19e8e5b885bf1ad"
+    },
+    "camera": {
+      "file": "camera-db509229-1723-4037-9cd0-5d7cfeb48051.webm",
+      "bytes": 134388440,
+      "sha256": "c2132361ef257647f175d8a2279e5b840cc0b1206c34b6dc55e5a6afbd0756d6"
+    }
+  },
+  "edits": []
+}
