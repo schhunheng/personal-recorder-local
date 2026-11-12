@@ -4,12 +4,14 @@ export function AutomationSettings({
   options,
   caps,
   microphone,
+  audioOnly = false,
   disabled,
   onChange,
 }: {
   options: PipelineOptions;
   caps?: PipelineCapabilities;
   microphone: boolean;
+  audioOnly?: boolean;
   disabled: boolean;
   onChange: (patch: Partial<PipelineOptions>) => void;
 }) {
@@ -18,28 +20,31 @@ export function AutomationSettings({
     (e) =>
       e.id === (selected === 'auto' ? caps.recommended_audio_engine : selected)
   );
+  const landscapeWidth = Math.round(options.height * 16 / 9 / 2) * 2;
   return (
     <div className="automation-settings guided-settings">
-      <Field label="Editing preset">
-        <select
-          value={options.preset}
-          disabled={disabled}
-          onChange={(e) =>
-            onChange({
-              preset: e.target.value as PipelineOptions['preset'],
-              profile: e.target.value === 'social' ? 'vertical' : 'lms',
-            })
-          }
-        >
-          <option value="clean">Clean Tutorial · natural pacing</option>
-          <option value="professional">
-            Professional Tutorial · cuts and zooms
-          </option>
-          <option value="social">
-            Social Media Short · vertical highlight
-          </option>
-        </select>
-      </Field>
+      {!audioOnly && (
+        <Field label="Editing preset">
+          <select
+            value={options.preset}
+            disabled={disabled}
+            onChange={(e) =>
+              onChange({
+                preset: e.target.value as PipelineOptions['preset'],
+                profile: e.target.value === 'social' ? 'vertical' : 'lms',
+              })
+            }
+          >
+            <option value="clean">Clean Tutorial · natural pacing</option>
+            <option value="professional">
+              Professional Tutorial · cuts and zooms
+            </option>
+            <option value="social">
+              Social Media Short · vertical highlight
+            </option>
+          </select>
+        </Field>
+      )}
       <Field label="Export profile">
         <select
           value={options.profile}
@@ -48,8 +53,8 @@ export function AutomationSettings({
             onChange({ profile: e.target.value as PipelineOptions['profile'] })
           }
         >
-          <option value="lms">YouTube / LMS · 1920 × 1080</option>
-          <option value="vertical">Reels / TikTok · 1080 × 1920</option>
+          <option value="lms">YouTube / LMS · {landscapeWidth} × {options.height}</option>
+          <option value="vertical">Reels / TikTok · {options.height} × {landscapeWidth}</option>
         </select>
       </Field>
       <Field label="Noise reduction">
@@ -139,7 +144,7 @@ export function AutomationSettings({
       <div className="audio-source-hint">
         {microphone && options.audio_source !== 'screen'
           ? 'Uses your separate microphone track for clearer narration. Captured tab/system sound is left out.'
-          : 'Cleans the audio already mixed into your screen recording. Background voices can remain.'}
+          : 'Cleans the audio in your uploaded video or original recording mix. Background voices can remain.'}
       </div>
       <Toggle
         label="Normalize voice volume"
@@ -148,15 +153,21 @@ export function AutomationSettings({
         disabled={disabled}
         onChange={(normalize) => onChange({ normalize })}
       />
-      <Toggle
-        label="Preselect suggested pause cuts"
-        description="Review or restore each proposed removal before downloading."
-        checked={options.accept_silence}
-        disabled={disabled}
-        onChange={(accept_silence) => onChange({ accept_silence })}
-      />
+      {!audioOnly && (
+        <Toggle
+          label="Preselect suggested pause cuts"
+          description="Review or restore each proposed removal before downloading."
+          checked={options.accept_silence}
+          disabled={disabled}
+          onChange={(accept_silence) => onChange({ accept_silence })}
+        />
+      )}
       <details className="automation-advanced">
-        <summary>Fine-tune cleanup, cuts and captions</summary>
+        <summary>
+          {audioOnly
+            ? 'Fine-tune cleanup and encoding'
+            : 'Fine-tune cleanup, cuts and captions'}
+        </summary>
         <fieldset disabled={disabled}>
           {engine?.id !== 'spectral' && options.noise !== 'off' && (
             <>
@@ -184,52 +195,60 @@ export function AutomationSettings({
               </p>
             </>
           )}
-          <Field label="Speech detection">
-            <select
-              value={options.vad}
-              onChange={(e) =>
-                onChange({ vad: e.target.value as PipelineOptions['vad'] })
-              }
-            >
-              <option value="auto">
-                Automatic · Silero or energy fallback
-              </option>
-              <option value="silero" disabled={!caps?.silero}>
-                Silero VAD{caps?.silero ? '' : ' · not installed'}
-              </option>
-              <option value="energy">
-                Energy-based · review quiet speech carefully
-              </option>
-            </select>
-          </Field>
-          <Slider
-            label="Minimum silence"
-            value={options.minimum_silence}
-            min={0.5}
-            max={5}
-            step={0.1}
-            suffix="s"
-            onChange={(minimum_silence) => onChange({ minimum_silence })}
-          />
-          <Slider
-            label="Speech padding"
-            value={options.speech_padding}
-            min={0.1}
-            max={0.8}
-            step={0.05}
-            suffix="s"
-            onChange={(speech_padding) => onChange({ speech_padding })}
-          />
-          {options.preset === 'social' && (
-            <Slider
-              label="Highlight length"
-              min={15}
-              max={90}
-              step={5}
-              value={options.clip_seconds}
-              suffix="s"
-              onChange={(clip_seconds) => onChange({ clip_seconds })}
-            />
+          {!audioOnly && (
+            <>
+              <Field label="Speech detection">
+                <select
+                  value={options.vad}
+                  onChange={(e) =>
+                    onChange({ vad: e.target.value as PipelineOptions['vad'] })
+                  }
+                >
+                  <option value="auto">
+                    Automatic · Silero or energy fallback
+                  </option>
+                  <option value="silero" disabled={!caps?.silero}>
+                    Silero VAD{caps?.silero ? '' : ' · not installed'}
+                  </option>
+                  <option value="energy">
+                    Energy-based · review quiet speech carefully
+                  </option>
+                </select>
+              </Field>
+              <Slider
+                label="Minimum silence"
+                value={options.minimum_silence}
+                min={0.5}
+                max={30}
+                step={0.1}
+                suffix="s"
+                onChange={(minimum_silence) => onChange({ minimum_silence })}
+              />
+              <Slider
+                label="Speech padding"
+                value={options.speech_padding}
+                min={0.1}
+                max={0.8}
+                step={0.05}
+                suffix="s"
+                onChange={(speech_padding) => onChange({ speech_padding })}
+              />
+              <p className="inspector-footnote">
+                Detection uses the original voice, including soft syllables.
+                Keep 0.4s or more around speech for a more natural pace.
+              </p>
+              {options.preset === 'social' && (
+                <Slider
+                  label="Highlight length"
+                  min={15}
+                  max={90}
+                  step={5}
+                  value={options.clip_seconds}
+                  suffix="s"
+                  onChange={(clip_seconds) => onChange({ clip_seconds })}
+                />
+              )}
+            </>
           )}
           <Field label="Encoding quality">
             <select
@@ -253,32 +272,36 @@ export function AutomationSettings({
             suffix=" Mbps"
             onChange={(bitrate_mbps) => onChange({ bitrate_mbps })}
           />
-          <Toggle
-            label="Offline Khmer / English captions"
-            description={
-              caps?.whisper
-                ? 'Local model ready. Review technical terms.'
-                : 'Install an offline Whisper model to enable captions.'
-            }
-            checked={options.transcribe}
-            disabled={!caps?.whisper || disabled}
-            onChange={(transcribe) => onChange({ transcribe })}
-          />
-          <Field label="Caption language">
-            <select
-              value={options.language}
-              disabled={!caps?.whisper}
-              onChange={(e) =>
-                onChange({
-                  language: e.target.value as PipelineOptions['language'],
-                })
-              }
-            >
-              <option value="km">Khmer</option>
-              <option value="en">English</option>
-              <option value="auto">Detect language</option>
-            </select>
-          </Field>
+          {!audioOnly && (
+            <>
+              <Toggle
+                label="Offline Khmer / English captions"
+                description={
+                  caps?.whisper
+                    ? 'Local model ready. Review technical terms.'
+                    : 'Install an offline Whisper model to enable captions.'
+                }
+                checked={options.transcribe}
+                disabled={!caps?.whisper || disabled}
+                onChange={(transcribe) => onChange({ transcribe })}
+              />
+              <Field label="Caption language">
+                <select
+                  value={options.language}
+                  disabled={!caps?.whisper}
+                  onChange={(e) =>
+                    onChange({
+                      language: e.target.value as PipelineOptions['language'],
+                    })
+                  }
+                >
+                  <option value="km">Khmer</option>
+                  <option value="en">English</option>
+                  <option value="auto">Detect language</option>
+                </select>
+              </Field>
+            </>
+          )}
         </fieldset>
       </details>
       <p className="inspector-footnote">

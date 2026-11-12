@@ -8,6 +8,7 @@ import type {
   RecordingMarker,
 } from './model';
 import { assetBlob, getAsset, saveAssetReference } from './storage';
+import { automaticCuts, sameRange } from './timeline';
 export type Preset = 'clean' | 'professional' | 'social';
 export type PipelineOptions = {
   preset: Preset;
@@ -44,6 +45,7 @@ export type EDL = {
     accepted: boolean;
   }[];
   zooms: Edits['zooms'];
+  masks?: Edits['masks'];
   camera: Edits['camera'];
   appearance: Edits['appearance'];
   captions: Caption[];
@@ -111,8 +113,8 @@ export const defaultPipeline: PipelineOptions = {
   audio_source: 'auto',
   normalize: true,
   vad: 'auto',
-  minimum_silence: 1.5,
-  speech_padding: 0.3,
+  minimum_silence: 1.8,
+  speech_padding: 0.4,
   threshold_db: -38,
   accept_silence: true,
   transcribe: false,
@@ -124,6 +126,38 @@ export const defaultPipeline: PipelineOptions = {
   fps: 30,
   action: 'plan',
 };
+export function projectPipelineOptions(
+  project: Project,
+  preferences: PipelineOptions
+): PipelineOptions {
+  const options = { ...defaultPipeline, ...preferences };
+  if (project.processing?.mode !== 'denoise')
+    return {
+      ...options,
+      noise: options.noise === 'ai' ? 'balanced' : options.noise,
+    };
+  return {
+    ...defaultPipeline,
+    noise: project.processing.noise || 'balanced',
+    audio_source: project.microphone ? 'auto' : 'screen',
+    profile: project.height > project.width ? 'vertical' : 'lms',
+    height: Math.min(project.width, project.height) <= 720 ? 720 : 1080,
+    accept_silence: false,
+    transcribe: false,
+    action: 'render',
+  };
+}
+export function noiseCancellationRequest(
+  options: PipelineOptions
+): PipelineOptions {
+  return {
+    ...options,
+    action: 'render',
+    preset: 'clean',
+    accept_silence: false,
+    transcribe: false,
+  };
+}
 export const defaultCaptionStyle: CaptionStyle = {
   font: 'Khmer Sangam MN',
   size: 42,
@@ -162,17 +196,19 @@ const json = (body: unknown) => ({
 });
 export function toEDL(project: Project): EDL {
   const e = project.edits;
+  const automatic = automaticCuts(e);
   return {
     schema_version: 1,
     source_duration: project.duration,
     trim: e.trim,
     cuts: e.cuts.map((c, i) => ({
       id: `manual-${i}`,
-      reason: 'manual',
+      reason: automatic.find((origin) => sameRange(c, origin))?.reason || 'manual',
       accepted: true,
       ...c,
     })),
     zooms: e.zooms,
+    masks: e.masks || [],
     camera: e.camera,
     appearance: e.appearance,
     captions: e.captions || [],
@@ -187,10 +223,14 @@ export function applyEDL(edits: Edits, edl: EDL): Edits {
     cuts: edl.cuts
       .filter((c) => c.accepted)
       .map((c) => ({ start: c.start, end: c.end })),
+    automaticCuts: edl.cuts
+      .filter((c) => c.accepted && c.reason !== 'manual')
+      .map((c) => ({ start: c.start, end: c.end, reason: c.reason as 'silence' | 'retake' })),
     silence: edl.cuts
       .filter((c) => c.reason === 'silence')
       .map((c) => ({ start: c.start, end: c.end })),
     zooms: edl.zooms,
+    masks: edl.masks || [],
     camera: edl.camera,
     appearance: edl.appearance,
     captions: edl.captions,

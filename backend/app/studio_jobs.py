@@ -144,7 +144,7 @@ CREATE INDEX IF NOT EXISTS project_jobs ON jobs(project_id,created);
             source=self.asset(p['id'],'screen'); probe=self.probe(source,cancel)
             video=next((s for s in probe['streams'] if s['codec_type']=='video'),None)
             if not video or video.get('width',0)*video.get('height',0)>3840*2160: raise ValueError('Use a screen recording up to 4K.')
-            if not any(fmt in probe['format'].get('format_name','').split(',') for fmt in ('matroska','webm','mov','mp4')): raise ValueError('Unsupported original video container.')
+            if not any(fmt in probe['format'].get('format_name','').split(',') for fmt in ('matroska','webm','mov','mp4','ogg')): raise ValueError('Unsupported original video container.')
             length=float(probe['format'].get('duration') or self.validate_timeline(source,cancel))
             if not math.isfinite(length) or length<=0 or length>self.config.max_duration: raise ValueError('Recording duration exceeds local limits.')
             with self.lock, self.connect() as db:
@@ -174,8 +174,8 @@ CREATE INDEX IF NOT EXISTS project_jobs ON jobs(project_id,created);
             self.update(jid,status='cleaning',stage='Cleaning and normalizing audio',progress=0)
             audio_info=self.cleanup_audio(extracted,cleaned,options,cancel,jid,warnings)
             audio_info.update(source='microphone' if use_microphone else 'screen' if audio_source else 'silence',source_offset_ms=delay)
-            self.update(jid,status='detecting',stage='Detecting speech and pauses',progress=0)
-            detected=analyze(cleaned,options.vad,options.threshold_db,cancel,lambda value:self.update(jid,progress=round(value*100,1))) if options.action=='plan' else {'speech':[],'waveform':{'levels':[],'step':.05},'engine':'not-needed','warnings':[]}; warnings+=detected['warnings']
+            self.update(jid,status='detecting',stage='Protecting speech in the original audio and finding long pauses',progress=0)
+            detected=analyze(extracted,options.vad,options.threshold_db,cancel,lambda value:self.update(jid,progress=round(value*100,1))) if options.action=='plan' else {'speech':[],'waveform':{'levels':[],'step':.05},'engine':'not-needed','warnings':[]}; warnings+=detected['warnings']
             self.update(jid,status='planning',stage='Preparing reversible draft edits',progress=None)
             from .studio_models import Marker
             edl=plan_edits(length,detected['speech'],[Marker.model_validate(m) for m in p['markers']],options)

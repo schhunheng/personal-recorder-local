@@ -29,7 +29,6 @@ import {
 import { Button } from '../components/ui/button';
 import {
   bytes,
-  defaultEdits,
   formatTime,
   type Project,
   type SavedExport,
@@ -39,7 +38,6 @@ import {
   deleteProject,
   download,
   duplicateProject,
-  importAsset,
   listProjects,
   listExports,
   localMediaURL,
@@ -55,6 +53,7 @@ import {
   type LocalProject,
 } from './pipeline';
 import Editor from './Editor';
+import { UploadVideo } from './UploadVideo';
 import { capabilities } from './capabilities';
 import { useMediaPlayback } from './useMediaPlayback';
 import { useDialog } from './useDialog';
@@ -121,13 +120,12 @@ export default function App() {
     [query, setQuery] = useState(''),
     [filter, setFilter] = useState('all'),
     [error, setError] = useState(''),
-    [working, setWorking] = useState(''),
+    [uploadOpen, setUploadOpen] = useState(false),
     [menu, setMenu] = useState(''),
     [confirmDelete, setConfirmDelete] = useState<Project>(),
     [storage, setStorage] = useState<StorageEstimate>(),
     [persisted, setPersisted] = useState(false);
-  const importRef = useRef<HTMLInputElement>(null),
-    open = useEditor((s) => s.open),
+  const open = useEditor((s) => s.open),
     current = useEditor((s) => s.project),
     preferences = usePreferences();
   useDialog(!!confirmDelete, () => setConfirmDelete(undefined));
@@ -181,65 +179,6 @@ export default function App() {
       openProject(p);
     }
   }
-  async function importRecording(file?: File) {
-    if (!file) return;
-    setError('');
-    setWorking('Importing your recording…');
-    let video: HTMLVideoElement | undefined;
-    const url = URL.createObjectURL(file);
-    try {
-      if (!/^video\/(webm|mp4|quicktime|ogg|x-matroska)$/.test(file.type))
-        throw Error(
-          'Choose a WebM, MP4, MOV, or other browser-supported video.'
-        );
-      if (storage?.quota && file.size > storage.quota - (storage.usage || 0))
-        throw Error(
-          'Not enough browser storage. Download and remove an old project first.'
-        );
-      video = await loadVideo(url);
-      let duration = video.duration;
-      if (!Number.isFinite(duration)) {
-        video.currentTime = 1e9;
-        await new Promise<void>((resolve, reject) => {
-          const timer = setTimeout(
-            () => reject(Error('Could not determine this video’s duration.')),
-            10000
-          );
-          video!.onseeked = () => {
-            clearTimeout(timer);
-            resolve();
-          };
-        });
-        duration = Number.isFinite(video.duration)
-          ? video.duration
-          : video.currentTime;
-      }
-      if (!Number.isFinite(duration) || duration <= 0 || !video.videoWidth)
-        throw Error(
-          'This video has no playable timeline. Try another recording.'
-        );
-      const asset = await importAsset(file);
-      const p: Project = {
-        id: crypto.randomUUID(),
-        title: file.name.replace(/\.[^.]+$/, ''),
-        created: Date.now(),
-        duration,
-        width: video.videoWidth,
-        height: video.videoHeight,
-        complete: true,
-        screen: asset,
-        edits: defaultEdits(duration),
-      };
-      await saveProject(p);
-      openProject(p);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      unloadVideo(video);
-      URL.revokeObjectURL(url);
-      setWorking('');
-    }
-  }
   const filtered = projects.filter(
     (p) =>
       p.title.toLowerCase().includes(query.toLowerCase()) &&
@@ -283,9 +222,9 @@ export default function App() {
           </button>
           <button
             disabled={captureBusy}
-            onClick={() => importRef.current?.click()}
+            onClick={() => setUploadOpen(true)}
           >
-            <ArrowDownToLine size={18} /> Import video
+            <ArrowDownToLine size={18} /> Upload video
           </button>
         </nav>
         <div className="sidebar-footer">
@@ -543,9 +482,9 @@ export default function App() {
                   </Button>
                   <button
                     className="hero-import"
-                    onClick={() => importRef.current?.click()}
+                    onClick={() => setUploadOpen(true)}
                   >
-                    <ArrowDownToLine size={16} /> Import a video
+                    <ArrowDownToLine size={16} /> Upload a video
                   </button>
                 </div>
                 <div className="hero-footer">
@@ -665,9 +604,9 @@ export default function App() {
                 </label>
                 <button
                   className="icon-button"
-                  title="Import a recording"
-                  aria-label="Import a recording"
-                  onClick={() => importRef.current?.click()}
+                  title="Upload a video"
+                  aria-label="Upload a video"
+                  onClick={() => setUploadOpen(true)}
                 >
                   <Plus size={19} />
                 </button>
@@ -858,27 +797,21 @@ export default function App() {
           </main>
         )}
       </div>
-      <input
-        ref={importRef}
-        type="file"
-        accept="video/webm,video/mp4,video/quicktime,video/ogg"
-        hidden
-        onChange={(e) => {
-          void importRecording(e.target.files?.[0]);
-          e.target.value = '';
-        }}
-      />
-      {(error || working) && (
-        <div
-          className={`toast ${error ? 'error' : ''}`}
-          role={error ? 'alert' : 'status'}
-        >
-          {error || working}
-          {error && (
-            <button aria-label="Dismiss error" onClick={() => setError('')}>
-              <X size={16} />
-            </button>
-          )}
+      {uploadOpen && (
+        <UploadVideo
+          onClose={() => setUploadOpen(false)}
+          onImported={(project) => {
+            setUploadOpen(false);
+            openProject(project);
+          }}
+        />
+      )}
+      {error && (
+        <div className="toast error" role="alert">
+          {error}
+          <button aria-label="Dismiss error" onClick={() => setError('')}>
+            <X size={16} />
+          </button>
         </div>
       )}
       {videos && (

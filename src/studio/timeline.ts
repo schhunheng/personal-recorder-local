@@ -30,6 +30,35 @@ export function segments(edits: Edits): Range[] {
 }
 export const editedDuration = (edits: Edits) =>
   segments(edits).reduce((sum, r) => sum + r.end - r.start, 0);
+export const sameRange = (a: Range, b: Range) =>
+  Math.abs(a.start - b.start) < 1e-6 && Math.abs(a.end - b.end) < 1e-6;
+export function automaticCuts(edits: Edits): NonNullable<Edits['automaticCuts']> {
+  // Older projects stored suggestions without their provenance. Recover exact
+  // matches only; an overlapping manual edit remains a manual edit.
+  return edits.automaticCuts ?? edits.cuts
+    .filter((cut) => edits.silence?.some((suggestion) => sameRange(cut, suggestion)))
+    .map((cut) => ({ ...cut, reason: 'silence' as const }));
+}
+export function updateSilenceSuggestions(
+  edits: Edits,
+  suggestions: Range[],
+  selected?: Range[]
+): Edits {
+  const previous = automaticCuts(edits);
+  if (!selected) return { ...edits, silence: suggestions, automaticCuts: previous };
+  const manual = edits.cuts.filter((cut) => !previous.some((old) =>
+    old.reason === 'silence' && sameRange(cut, old)
+  ));
+  return {
+    ...edits,
+    silence: suggestions,
+    cuts: mergeRanges([...manual, ...selected], edits.trim),
+    automaticCuts: [
+      ...previous.filter((cut) => cut.reason !== 'silence'),
+      ...selected.map((cut) => ({ ...cut, reason: 'silence' as const })),
+    ],
+  };
+}
 export function zoomAt(zooms: Zoom[], time: number) {
   const sorted = [...zooms].sort((a, b) => a.time - b.time);
   type Pose = { scale: number; x: number; y: number };
@@ -68,17 +97,25 @@ export function detectSilence(
   step: number,
   thresholdDb: number,
   minimum: number,
-  padding = 0.18
+  padding = 0.4
 ): Range[] {
+  if (!levels.length || !Number.isFinite(step) || step <= 0) return [];
   const result: Range[] = [];
   let start = -1;
-  const threshold = 10 ** (thresholdDb / 20);
+  const onset = 10 ** (thresholdDb / 20);
+  const ordered = [...levels].sort((a, b) => a - b);
+  const position = (ordered.length - 1) * 0.2;
+  const floor = ordered[Math.floor(position)] +
+    (ordered[Math.ceil(position)] - ordered[Math.floor(position)]) * (position % 1);
+  // Match the local editor's safety band for quieter syllables and consonants.
+  const threshold = Math.min(onset, Math.max(onset * 0.25, floor * 2));
+  if (!levels.some((level) => level >= threshold)) return [];
   for (let i = 0; i <= levels.length; i++) {
     if (i < levels.length && levels[i] < threshold) {
       if (start < 0) start = i * step;
     } else if (start >= 0) {
       const end = i * step;
-      if (end - start >= minimum + padding * 2)
+      if (end - start >= minimum && end - start - padding * 2 >= 0.35)
         result.push({ start: start + padding, end: end - padding });
       start = -1;
     }

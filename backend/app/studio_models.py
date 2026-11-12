@@ -46,6 +46,25 @@ class Camera(Schema):
     border: bool = True
     shadow: bool = True
 
+class ScreenMask(Interval):
+    id: str = Field(min_length=1, max_length=100)
+    x: float = Field(ge=0, le=1)
+    y: float = Field(ge=0, le=1)
+    width: float = Field(ge=.01, le=1)
+    height: float = Field(ge=.01, le=1)
+    color: str = '#000000'
+    @field_validator('color')
+    @classmethod
+    def hex_color(cls, value):
+        import re
+        if not re.fullmatch(r'#[0-9a-fA-F]{6}', value): raise ValueError('Use a hex color')
+        return value
+    @model_validator(mode='after')
+    def inside_screen(self):
+        if self.x + self.width > 1 + 1e-9 or self.y + self.height > 1 + 1e-9:
+            raise ValueError('Hidden area exceeds screen bounds')
+        return self
+
 class Appearance(Schema):
     background: str = '#182b29'
     padding: float = Field(default=.045, ge=0, le=.2)
@@ -88,6 +107,7 @@ class EDL(Schema):
     trim: Interval
     cuts: list[Cut] = Field(default_factory=list, max_length=2000)
     zooms: list[Zoom] = Field(default_factory=list, max_length=500)
+    masks: list[ScreenMask] = Field(default_factory=list, max_length=100)
     camera: Camera = Field(default_factory=Camera)
     appearance: Appearance = Field(default_factory=Appearance)
     captions: list[Caption] = Field(default_factory=list, max_length=20000)
@@ -96,7 +116,7 @@ class EDL(Schema):
     @model_validator(mode='after')
     def bounded(self):
         if self.trim.end > self.source_duration + .1: raise ValueError('Trim exceeds source duration')
-        for region in self.cuts + self.captions:
+        for region in self.cuts + self.captions + self.masks:
             if region.end > self.source_duration + .1: raise ValueError('Timeline region exceeds source duration')
         return self
 
@@ -109,8 +129,8 @@ class PipelineOptions(Schema):
     audio_source: Literal['auto', 'microphone', 'screen'] = 'auto'
     normalize: bool = True
     vad: Literal['auto', 'silero', 'energy'] = 'auto'
-    minimum_silence: float = Field(default=1.5, ge=.5, le=15)
-    speech_padding: float = Field(default=.3, ge=.1, le=1)
+    minimum_silence: float = Field(default=1.8, ge=.5, le=30)
+    speech_padding: float = Field(default=.4, ge=.1, le=1)
     threshold_db: float = Field(default=-38, ge=-65, le=-15)
     accept_silence: bool = True
     transcribe: bool = False

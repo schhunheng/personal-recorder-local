@@ -1,4 +1,6 @@
 export type Range = { start: number; end: number };
+export type MaskRect = { x: number; y: number; width: number; height: number };
+export type ScreenMask = Range & MaskRect & { id: string; color: string };
 export type Zoom = {
   id: string;
   time: number;
@@ -25,8 +27,10 @@ export type Edits = {
   waveform?: { levels: number[]; step: number };
   trim: Range;
   cuts: Range[];
+  automaticCuts?: (Range & { reason: 'silence' | 'retake' })[];
   splits: number[];
   zooms: Zoom[];
+  masks?: ScreenMask[];
   silence: Range[];
   camera: Camera;
   avatar?: string;
@@ -112,6 +116,8 @@ export type Project = {
   processing?: {
     // Open automatic editing settings; processing starts only after a click.
     requested?: boolean;
+    mode?: 'edit' | 'denoise';
+    noise?: 'light' | 'balanced' | 'strong';
     timelineVersion?: number;
     jobId?: string;
     appliedJobId?: string;
@@ -163,6 +169,7 @@ export function defaultEdits(duration: number): Edits {
     cuts: [],
     splits: [],
     zooms: [],
+    masks: [],
     silence: [],
     camera: { ...defaultCamera },
     audio: { enabled: false, strength: 0.5, gain: 1 },

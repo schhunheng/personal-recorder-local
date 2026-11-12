@@ -116,7 +116,7 @@ class RecordingLibrary:
             raise ValueError('Invalid avatar revision')
         source = Path(source)
         extension = source.suffix.lower()
-        if extension not in ('.webm', '.mp4', '.mov', '.ogg', '.wav'):
+        if extension not in ('.webm', '.mp4', '.mov', '.ogg', '.ogv', '.mkv', '.wav'):
             raise ValueError('Unsupported original extension')
         digest = digest or checksum(source)
         key = f'{kind}:{revision}' if revision else kind

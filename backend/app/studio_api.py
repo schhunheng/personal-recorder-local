@@ -43,11 +43,14 @@ async def upload(id:str,kind:Literal['screen','microphone','camera','avatar'],re
     s=service(request); p=require(request,'project',id)
     if kind in p['assets'] and (kind!='avatar' or not revision or p['assets'][kind].get('revision')==str(revision)): return p['assets'][kind]
     mime=request.headers.get('content-type','').split(';')[0]
-    if mime not in ('video/webm','video/mp4','audio/webm','audio/mp4','audio/ogg','video/quicktime'): raise HTTPException(415,'Unsupported local media type')
+    if mime not in ('video/webm','video/mp4','audio/webm','audio/mp4','audio/ogg','video/quicktime','video/ogg','video/x-matroska'): raise HTTPException(415,'Unsupported local media type')
     try: size=int(request.headers.get('content-length','0'))
     except ValueError: raise HTTPException(400,'Invalid content length')
     if size>s.config.max_bytes: raise HTTPException(413,'Media exceeds configured local size limit')
-    ext='.mp4' if mime.endswith(('mp4','quicktime')) else '.ogg' if mime.endswith('ogg') else '.webm'
+    ext={
+        'video/mp4':'.mp4','audio/mp4':'.mp4','video/quicktime':'.mov',
+        'video/ogg':'.ogv','audio/ogg':'.ogg','video/x-matroska':'.mkv',
+    }.get(mime,'.webm')
     folder=s.folder(id); partial=folder/f'{kind}.upload.partial'; target=folder/f'original-{kind}{"-"+str(revision) if kind=="avatar" and revision else ""}{ext}'
     if target.exists():
         digest=await run_in_threadpool(checksum,target)

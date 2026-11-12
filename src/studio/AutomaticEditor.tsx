@@ -11,6 +11,7 @@ import {
 import { Button } from '../components/ui/button';
 import { AutomationSettings } from './AutomationSettings';
 import { AudioComparison } from './AudioComparison';
+import { Toggle } from './controls';
 import {
   editingSteps,
   processingLabels,
@@ -26,7 +27,8 @@ import { useEditor, usePreferences } from './store';
 import {
   applyEDL,
   activePipeline,
-  defaultPipeline,
+  projectPipelineOptions,
+  noiseCancellationRequest,
   localRequest,
   startPipeline,
   toEDL,
@@ -45,14 +47,12 @@ export function AutomaticEditor({
 }) {
   const prefs = usePreferences((s) => s.automation),
     setPrefs = usePreferences((s) => s.setAutomation);
-  const [options, setOptions] = useState<PipelineOptions>(() => ({
-    ...defaultPipeline,
-    ...prefs.options,
-    noise:
-      prefs.options.noise === 'ai'
-        ? 'balanced'
-        : prefs.options.noise || defaultPipeline.noise,
-  }));
+  const [options, setOptions] = useState<PipelineOptions>(() =>
+    projectPipelineOptions(project, prefs.options)
+  );
+  const [audioOnly, setAudioOnly] = useState(
+    project.processing?.mode === 'denoise'
+  );
   const [step, setStep] = useState<EditingStep>(0);
   const completedShown = useRef('');
   const [expanded, setExpanded] = useState(
@@ -87,6 +87,8 @@ export function AutomaticEditor({
   function update(values: Partial<PipelineOptions>) {
     setOptions((o) => ({ ...o, ...values }));
     setPrefs({ options: { ...options, ...values } });
+    if (values.noise && ['light', 'balanced', 'strong'].includes(values.noise))
+      patch({ noise: values.noise as 'light' | 'balanced' | 'strong' });
   }
   function apply(edl: EDL, source = job) {
     if (!source) return;
@@ -182,7 +184,10 @@ export function AutomaticEditor({
           'FFmpeg is not installed. Install it and restart the local studio service.'
         );
       const snapshot = structuredClone(latest.current.project);
-      const request = { ...options, action, edl: reviewed || toEDL(snapshot) };
+      const settings = audioOnly
+        ? noiseCancellationRequest(options)
+        : { ...options, action };
+      const request = { ...settings, edl: reviewed || toEDL(snapshot) };
       const next = await startPipeline(
         snapshot,
         request,
@@ -349,15 +354,33 @@ export function AutomaticEditor({
             {step === 0 && (
               <>
                 <div className="step-introduction">
-                  <h3>1. Choose your sound and editing style</h3>
+                  <h3>
+                    {audioOnly
+                      ? '1. Set up AI noise cancellation'
+                      : '1. Choose your sound and editing style'}
+                  </h3>
                   <p>
-                    Review your settings, then click Auto edit to clean your
-                    voice and create a draft. Your originals stay intact.
+                    {audioOnly
+                      ? 'Review your settings, then click Remove noise to create a cleaned MP4. Compare the original and cleaned audio before downloading.'
+                      : 'Review your settings, then click Auto edit to clean your voice and create a draft. Your originals stay intact.'}
                   </p>
                 </div>
+                <Toggle
+                  label="Noise cancellation only"
+                  description="Clean the audio using the current timeline, without automatic pause cuts, zooms or captions."
+                  checked={audioOnly}
+                  disabled={running}
+                  onChange={(enabled) => {
+                    setAudioOnly(enabled);
+                    patch({ mode: enabled ? 'denoise' : 'edit' });
+                    if (enabled && options.noise === 'off')
+                      update({ noise: 'balanced', noise_strength: null });
+                  }}
+                />
                 <AutomationSettings
                   options={options}
                   caps={caps}
+                  audioOnly={audioOnly}
                   microphone={!!project.microphone}
                   disabled={running}
                   onChange={update}
@@ -365,15 +388,17 @@ export function AutomaticEditor({
                 <div className="automation-actions step-actions">
                   <Button disabled={running} onClick={() => void run('plan')}>
                     <Sparkles size={15} />
-                    Auto edit
+                    {audioOnly ? 'Remove noise' : 'Auto edit'}
                   </Button>
-                  <Button
-                    variant="secondary"
-                    disabled={running}
-                    onClick={() => void run('render')}
-                  >
-                    Export current timeline to MP4
-                  </Button>
+                  {!audioOnly && (
+                    <Button
+                      variant="secondary"
+                      disabled={running}
+                      onClick={() => void run('render')}
+                    >
+                      Export current timeline to MP4
+                    </Button>
+                  )}
                   {running && (
                     <Button variant="secondary" onClick={() => setStep(1)}>
                       View progress
@@ -489,10 +514,15 @@ export function AutomaticEditor({
             {step === 2 && ready && result && job && (
               <>
                 <div className="step-introduction">
-                  <h3>3. Listen, watch and review cuts</h3>
+                  <h3>
+                    {audioOnly
+                      ? '3. Compare your cleaned video'
+                      : '3. Listen, watch and review cuts'}
+                  </h3>
                   <p>
-                    This preview is the last rendered draft. Adjust the proposed
-                    cuts below, then export to include your changes.
+                    {audioOnly
+                      ? 'Listen to quiet words and background sound in both versions. Adjust cleanup settings if you need a lighter or stronger result.'
+                      : 'This preview is the last rendered draft. Adjust the proposed cuts below, then export to include your changes.'}
                   </p>
                 </div>
                 <div className="guided-review-layout">
@@ -540,9 +570,9 @@ export function AutomaticEditor({
                     <AudioComparison job={job} />
                   </div>
                   <div className="review-cuts-panel">
-                    <h3>Suggested cuts</h3>
+                    <h3>{audioOnly ? 'Current timeline' : 'Suggested cuts'}</h3>
                     <p className="muted small">
-                      Uncheck a region to keep it in your lesson.
+                      {audioOnly ? 'Noise cancellation adds no automatic cuts.' : 'Uncheck a region to keep it in your lesson.'}
                     </p>
                     <div className="draft-cuts">
                       {draft?.cuts.length ? (
@@ -575,11 +605,11 @@ export function AutomaticEditor({
                         ))
                       ) : (
                         <p className="muted small">
-                          No pauses or marked retakes need removal.
+                          {audioOnly ? 'The full trimmed video is retained.' : 'No pauses or marked retakes need removal.'}
                         </p>
                       )}
                     </div>
-                    {draft && (
+                    {draft && (!audioOnly || !!draft.cuts.length) && (
                       <Button
                         variant="secondary"
                         onClick={() =>
@@ -630,7 +660,7 @@ export function AutomaticEditor({
                         {warning}
                       </p>
                     ))}
-                    {caps && !caps.subtitle_burn && (
+                    {caps && !caps.subtitle_burn && !audioOnly && (
                       <p className="inspector-footnote">
                         MP4 text overlays require a libass-capable FFmpeg. Use
                         SRT or browser export for captions when unavailable.

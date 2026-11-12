@@ -2243,6 +2243,44 @@ input[type='color'] {
   color: #698a73;
   padding: 5px;
 }
+.upload-video-modal {
+  width: min(480px, 100%);
+}
+.video-dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  border: 1px dashed #8bd9a75c;
+  border-radius: 10px;
+  background: #8bd9a708;
+  padding: 26px 18px;
+  margin-bottom: 18px;
+  color: #b7d7c0;
+}
+.video-dropzone:hover,
+.video-dropzone.dragging {
+  border-color: #9dd9af;
+  background: #8bd9a712;
+}
+.video-dropzone strong {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.video-dropzone span,
+.upload-help {
+  font-size: 11px;
+  color: #9ab2a3;
+  line-height: 1.7;
+}
+.upload-video-modal .upload-help {
+  margin: 16px 0;
+}
+.upload-continue {
+  width: 100%;
+  margin-top: 8px;
+}
 .modal-symbol {
   display: grid;
   place-items: center;

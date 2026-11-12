@@ -7,7 +7,7 @@ import {
   VolumeX,
   Maximize2,
 } from 'lucide-react';
-import type { Project } from './model';
+import type { MaskRect, Project } from './model';
 import { clamp, formatTime } from './model';
 import { assetBlob, getAsset, localMediaURL } from './storage';
 import { playMedia } from './useMediaPlayback';
@@ -15,6 +15,13 @@ import { audioGraph, type AudioGraph } from './audio';
 import { drawFrame, screenBounds } from './compositor';
 import { loadVideo, seek, unloadVideo } from './media';
 import { segments, zoomAt } from './timeline';
+import {
+  MIN_MASK_SIZE,
+  maskFromPoints,
+  moveMask,
+  resizeMask,
+  type Point,
+} from './masks';
 export function Preview({
   project,
   time,
@@ -23,6 +30,10 @@ export function Preview({
   onFocus,
   onCamera,
   selectedZoom,
+  selectedMask,
+  onMask,
+  onMaskChange,
+  onSelectMask,
   suspended = false,
 }: {
   project: Project;
@@ -32,6 +43,10 @@ export function Preview({
   onFocus: (x: number, y: number) => void;
   onCamera: (x: number, y: number) => void;
   selectedZoom?: string;
+  selectedMask?: string;
+  onMask: (rect: MaskRect) => void;
+  onMaskChange: (id: string, rect: MaskRect) => void;
+  onSelectMask: (id: string) => void;
   suspended?: boolean;
 }) {
   const canvas = useRef<HTMLCanvasElement>(null),
@@ -40,8 +55,19 @@ export function Preview({
     graph = useRef<AudioGraph | undefined>(undefined);
   const requestedTime = useRef(time);
   requestedTime.current = time;
-  const latest = useRef({ project, setTime });
-  latest.current = { project, setTime };
+  const latest = useRef({ project, setTime, tool, selectedMask });
+  latest.current = { project, setTime, tool, selectedMask };
+  const maskDrag = useRef<{
+    mode: 'draw' | 'move' | 'resize';
+    start: Point;
+    original: MaskRect;
+    next: MaskRect;
+    id?: string;
+    color: string;
+  } | undefined>(undefined);
+  useEffect(() => {
+    maskDrag.current = undefined;
+  }, [tool]);
   const [playing, setPlaying] = useState(false),
     [ready, setReady] = useState(false),
     [error, setError] = useState(''),
@@ -139,16 +165,56 @@ export function Preview({
             localCamera.currentTime = video.currentTime;
         }
         const c = canvas.current;
-        if (c)
+        if (c) {
+          const drag = latest.current.tool === 'hide'
+            ? maskDrag.current
+            : undefined;
+          const edits = drag
+            ? {
+                ...p.edits,
+                masks: [
+                  ...(p.edits.masks || []).filter((mask) => mask.id !== drag.id),
+                  { ...drag.next, ...p.edits.trim, id: 'drawing', color: drag.color },
+                ],
+              }
+            : p.edits;
           drawFrame(
             c.getContext('2d')!,
             video,
             localCamera,
-            p.edits,
+            edits,
             video.currentTime,
             c.width,
             c.height
           );
+          if (latest.current.tool === 'hide') {
+            const mask = drag?.next || p.edits.masks?.find((item) =>
+              item.id === latest.current.selectedMask &&
+              item.start <= video.currentTime && item.end > video.currentTime
+            );
+            if (mask) {
+              const ctx = c.getContext('2d')!,
+                b = screenBounds(video, p.edits, c.width, c.height),
+                z = zoomAt(p.edits.zooms, video.currentTime),
+                x = b.x + ((mask.x - z.x) * z.scale + 0.5) * b.w,
+                y = b.y + ((mask.y - z.y) * z.scale + 0.5) * b.h,
+                w = mask.width * z.scale * b.w,
+                h = mask.height * z.scale * b.h,
+                handle = c.width / 80;
+              ctx.save();
+              ctx.beginPath();
+              ctx.rect(b.x, b.y, b.w, b.h);
+              ctx.clip();
+              ctx.strokeStyle = '#a8f0c6';
+              ctx.lineWidth = Math.max(2, c.width / 600);
+              ctx.setLineDash([handle / 2, handle / 3]);
+              ctx.strokeRect(x, y, w, h);
+              ctx.fillStyle = '#a8f0c6';
+              ctx.fillRect(x + w - handle / 2, y + h - handle / 2, handle, handle);
+              ctx.restore();
+            }
+          }
+        }
       }, 1000 / 30);
     })().catch((e) => {
       if (!gone) setError(e.message);
@@ -258,11 +324,99 @@ export function Preview({
       : project.edits.appearance.ratio === '9:16'
       ? 9 / 16
       : 16 / 9;
-  function pointer(e: React.PointerEvent<HTMLCanvasElement>) {
+  function canvasPoint(e: React.PointerEvent<HTMLCanvasElement>) {
     const c = canvas.current!,
       rect = c.getBoundingClientRect(),
-      x = clamp((e.clientX - rect.left) / rect.width),
-      y = clamp((e.clientY - rect.top) / rect.height);
+      scale = Math.min(rect.width / c.width, rect.height / c.height);
+    return {
+      x: (e.clientX - rect.left - (rect.width - c.width * scale) / 2) / scale / c.width,
+      y: (e.clientY - rect.top - (rect.height - c.height * scale) / 2) / scale / c.height,
+      scale,
+    };
+  }
+  function sourcePoint(e: React.PointerEvent<HTMLCanvasElement>, bounded = true) {
+    const c = canvas.current!,
+      video = screen.current;
+    if (!video) return;
+    const point = canvasPoint(e),
+      b = screenBounds(video, project.edits, c.width, c.height),
+      z = zoomAt(project.edits.zooms, video.currentTime),
+      x = z.x + ((point.x * c.width - b.x) / b.w - 0.5) / z.scale,
+      y = z.y + ((point.y * c.height - b.y) / b.h - 0.5) / z.scale;
+    if (bounded && (
+      point.x * c.width < b.x || point.x * c.width > b.x + b.w ||
+      point.y * c.height < b.y || point.y * c.height > b.y + b.h ||
+      x < 0 || x > 1 || y < 0 || y > 1
+    )) return;
+    return {
+      x: clamp(x),
+      y: clamp(y),
+      toleranceX: 10 / point.scale / b.w / z.scale,
+      toleranceY: 10 / point.scale / b.h / z.scale,
+    };
+  }
+  function startMask(e: React.PointerEvent<HTMLCanvasElement>) {
+    const point = sourcePoint(e);
+    if (!point || !ready) return;
+    screen.current?.pause();
+    camera.current?.pause();
+    setPlaying(false);
+    setTime(screen.current!.currentTime);
+    const masks = (project.edits.masks || []).filter((mask) =>
+      mask.start <= screen.current!.currentTime && mask.end > screen.current!.currentTime
+    );
+    const selected = masks.find((mask) => mask.id === selectedMask),
+      resize = selected &&
+        Math.abs(point.x - selected.x - selected.width) < point.toleranceX &&
+        Math.abs(point.y - selected.y - selected.height) < point.toleranceY,
+      contains = (mask: MaskRect) =>
+        point.x >= mask.x && point.x <= mask.x + mask.width &&
+        point.y >= mask.y && point.y <= mask.y + mask.height,
+      hit = resize ? selected
+        : selected && contains(selected) ? selected
+        : [...masks].reverse().find(contains),
+      original = hit || { x: point.x, y: point.y, width: 0, height: 0 };
+    if (!hit && (project.edits.masks?.length || 0) >= 100) return;
+    if (hit) onSelectMask(hit.id);
+    maskDrag.current = {
+      mode: resize ? 'resize' : hit ? 'move' : 'draw',
+      start: point,
+      original,
+      next: original,
+      id: hit?.id,
+      color: hit?.color || '#000000',
+    };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  }
+  function moveMaskPointer(e: React.PointerEvent<HTMLCanvasElement>) {
+    const drag = maskDrag.current,
+      point = sourcePoint(e, false);
+    if (!drag || !point) return;
+    const dx = point.x - drag.start.x,
+      dy = point.y - drag.start.y;
+    drag.next = drag.mode === 'draw' ? maskFromPoints(drag.start, point)
+      : drag.mode === 'move' ? moveMask(drag.original, dx, dy)
+      : resizeMask(drag.original, dx, dy);
+  }
+  function finishMask(e: React.PointerEvent<HTMLCanvasElement>) {
+    moveMaskPointer(e);
+    const drag = maskDrag.current;
+    maskDrag.current = undefined;
+    if (e.currentTarget.hasPointerCapture(e.pointerId))
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    if (!drag || drag.next.width < MIN_MASK_SIZE || drag.next.height < MIN_MASK_SIZE) return;
+    if (drag.id) {
+      if ((['x', 'y', 'width', 'height'] as const).some((key) =>
+        drag.next[key] !== drag.original[key]
+      ))
+        onMaskChange(drag.id, drag.next);
+    } else onMask(drag.next);
+  }
+  function pointer(e: React.PointerEvent<HTMLCanvasElement>) {
+    const c = canvas.current!,
+      point = canvasPoint(e),
+      x = clamp(point.x),
+      y = clamp(point.y);
     if (tool === 'camera') onCamera(x, y);
     else if (tool === 'zoom' && screen.current) {
       const b = screenBounds(screen.current, project.edits, c.width, c.height);
@@ -299,12 +453,15 @@ export function Preview({
             width={Math.round(resolution * ratio)}
             height={resolution}
             aria-label={
-              tool === 'camera'
+              tool === 'hide'
+                ? 'Video preview. Draw, move, or resize hidden areas.'
+                : tool === 'camera'
                 ? 'Video preview. Drag to move camera.'
                 : 'Video preview. Click to focus zoom.'
             }
             tabIndex={0}
             onKeyDown={(e) => {
+              if (e.key === 'Escape') maskDrag.current = undefined;
               const d = 0.02;
               if (
                 tool === 'camera' &&
@@ -330,15 +487,33 @@ export function Preview({
               }
             }}
             onPointerDown={(e) => {
+              if (e.button !== 0) return;
+              if (tool === 'hide') {
+                startMask(e);
+                return;
+              }
               if (tool !== 'zoom' && tool !== 'camera') return;
               dragging.current = true;
               e.currentTarget.setPointerCapture(e.pointerId);
               pointer(e);
             }}
             onPointerMove={(e) => {
+              if (tool === 'hide') {
+                moveMaskPointer(e);
+                return;
+              }
               if (dragging.current) pointer(e);
             }}
-            onPointerUp={() => {
+            onPointerUp={(e) => {
+              if (tool === 'hide') finishMask(e);
+              dragging.current = false;
+            }}
+            onPointerCancel={() => {
+              maskDrag.current = undefined;
+              dragging.current = false;
+            }}
+            onLostPointerCapture={() => {
+              maskDrag.current = undefined;
               dragging.current = false;
             }}
           />
@@ -354,6 +529,8 @@ export function Preview({
           ? selectedZoom
             ? 'Drag in the preview to move the selected zoom focus'
             : 'Click on the code you want to bring into focus'
+          : tool === 'hide'
+          ? 'Drag to cover an area · Drag a cover to move · Drag its corner to resize'
           : tool === 'camera'
           ? 'Drag in the preview to reposition your camera · Arrow keys also work'
           : 'Your edits are saved on this device'}

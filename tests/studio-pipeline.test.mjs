@@ -25,6 +25,7 @@ test('only accepted draft cuts are applied and original source metadata stays se
       trim: { start: 0, end: 12 },
       cuts: [{ start: 4, end: 5 }],
       zooms: [],
+      masks: [{ id: 'private', x: 0.2, y: 0.2, width: 0.3, height: 0.1, color: '#000000', start: 1, end: 10 }],
       camera: { visible: true },
       appearance: { ratio: '16:9' },
       audio: { enabled: false },
@@ -42,8 +43,12 @@ test('only accepted draft cuts are applied and original source metadata stays se
   assert.deepEqual(edits.cuts, [{ start: 4, end: 5 }]);
   assert.equal(project.screen.id, 'immutable-source');
   assert.equal(edits.audio, project.edits.audio);
+  assert.deepEqual(edl.masks, project.edits.masks);
+  assert.deepEqual(edits.masks, project.edits.masks);
   edl.cuts[1].accepted = true;
   assert.equal(applyEDL(project.edits, edl).cuts.length, 2);
+  delete edl.masks;
+  assert.deepEqual(applyEDL(project.edits, edl).masks, []);
 });
 test('automatic processing cannot send media to a non-local origin', async () => {
   globalThis.window = { location: { hostname: 'cloud.example' } };
@@ -59,4 +64,19 @@ test('automatic processing cannot send media to a non-local origin', async () =>
   } finally {
     globalThis.fetch = original;
   }
+});
+test('replanning can replace earlier silence cuts instead of treating them as permanent manual edits', () => {
+  const edits = {
+    trim: { start: 0, end: 12 }, cuts: [], zooms: [],
+    camera: {}, appearance: {}, audio: {},
+  };
+  const edl = toEDL({ duration: 12, edits });
+  edl.cuts = [
+    { id: 'automatic', start: 2, end: 5, reason: 'silence', accepted: true },
+    { id: 'manual', start: 8, end: 9, reason: 'manual', accepted: true },
+  ];
+  const applied = applyEDL(edits, edl);
+  assert.deepEqual(toEDL({ duration: 12, edits: applied }).cuts.map((c) => c.reason), ['silence', 'manual']);
+  delete applied.automaticCuts;
+  assert.deepEqual(toEDL({ duration: 12, edits: applied }).cuts.map((c) => c.reason), ['silence', 'manual']);
 });

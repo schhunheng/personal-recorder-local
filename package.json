@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "test": "node --test tests/studio*.test.mjs",
     "test:browser": "node tests/studio-browser.mjs",
+    "test:upload-browser": "node tests/studio-upload-browser.mjs",
     "dev:all": "node scripts/dev.mjs",
     "dev:api": ".venv/bin/python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8001",
     "test:api": ".venv/bin/python -m pytest backend/tests -q",

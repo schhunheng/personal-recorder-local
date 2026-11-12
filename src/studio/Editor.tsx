@@ -16,6 +16,7 @@ import {
   Save,
   LoaderCircle,
   Captions,
+  EyeOff,
 } from 'lucide-react';
 import { useEditor, usePreferences } from './store';
 import {
@@ -26,6 +27,8 @@ import {
   type Project,
   type Asset,
   type SavedExport,
+  type MaskRect,
+  type ScreenMask,
 } from './model';
 import {
   saveProject,
@@ -41,13 +44,14 @@ import { archiveBrowserExport } from './pipeline';
 import { watermarkColor } from './compositor';
 import { CameraSettings } from './CameraSettings';
 import { CaptionEditor } from './CaptionEditor';
+import { HideSettings } from './HideSettings';
 import { AutomaticEditor } from './AutomaticEditor';
 import { Preview } from './Preview';
 import { Timeline } from './TimelinePanel';
 import { Toggle, Slider, Field } from './controls';
 import { Button } from '../components/ui/button';
 import { analyzeAudio, silenceSuggestions } from './analyze';
-import { editedDuration, mergeRanges } from './timeline';
+import { editedDuration, mergeRanges, updateSilenceSuggestions } from './timeline';
 import { exportVideo } from './export';
 import { loadVideo, unloadVideo } from './media';
 import { useDialog } from './useDialog';
@@ -58,6 +62,7 @@ export default function Editor({ onBack }: { onBack: () => void }) {
   const [tool, setTool] = useState('zoom'),
     [time, setTime] = useState(0),
     [selected, setSelected] = useState(''),
+    [selectedMask, setSelectedMask] = useState(''),
     [error, setError] = useState(''),
     [saved, setSaved] = useState(true);
   const [analysis, setAnalysis] = useState<{ levels: number[]; step: number }>(
@@ -65,7 +70,7 @@ export default function Editor({ onBack }: { onBack: () => void }) {
     ),
     [progress, setProgress] = useState(0),
     [working, setWorking] = useState(''),
-    [minimum, setMinimum] = useState(1.2),
+    [minimum, setMinimum] = useState(1.8),
     [threshold, setThreshold] = useState(-38),
     [mode, setMode] = useState('review'),
     [selectedSilence, setSelectedSilence] = useState<number[]>([]);
@@ -170,6 +175,28 @@ export default function Editor({ onBack }: { onBack: () => void }) {
       zooms: e.zooms.map((z) => (z.id === selected ? { ...z, ...values } : z)),
     }));
   }
+  function addMask(
+    rect: MaskRect = { x: 0.35, y: 0.35, width: 0.3, height: 0.2 }
+  ) {
+    if ((p.edits.masks?.length || 0) >= 100) return;
+    const id = crypto.randomUUID();
+    edit((edits) => ({
+      ...edits,
+      masks: [
+        ...(edits.masks || []),
+        { ...rect, id, color: '#000000', ...edits.trim },
+      ],
+    }));
+    setSelectedMask(id);
+  }
+  function changeMask(id: string, patch: Partial<ScreenMask>) {
+    edit((edits) => ({
+      ...edits,
+      masks: (edits.masks || []).map((mask) =>
+        mask.id === id ? { ...mask, ...patch } : mask
+      ),
+    }));
+  }
   async function analyze() {
     controller.current = new AbortController();
     setWorking('Analyzing audio');
@@ -190,12 +217,10 @@ export default function Editor({ onBack }: { onBack: () => void }) {
         minimum
       );
       edit((e) => ({
-        ...e,
+        ...updateSilenceSuggestions(
+          e, silence, mode === 'auto' ? silence : undefined
+        ),
         waveform: data,
-        silence,
-        ...(mode === 'auto'
-          ? { cuts: mergeRanges([...e.cuts, ...silence], e.trim) }
-          : {}),
       }));
       setSelectedSilence(silence.map((_, i) => i));
     } catch (e) {
@@ -216,13 +241,9 @@ export default function Editor({ onBack }: { onBack: () => void }) {
       threshold,
       minimum
     );
-    edit((e) => ({
-      ...e,
-      silence,
-      ...(mode === 'auto'
-        ? { cuts: mergeRanges([...e.cuts, ...silence], e.trim) }
-        : {}),
-    }));
+    edit((e) => updateSilenceSuggestions(
+      e, silence, mode === 'auto' ? silence : undefined
+    ));
     setSelectedSilence(silence.map((_, i) => i));
   }
   async function exportNow() {
@@ -356,6 +377,7 @@ export default function Editor({ onBack }: { onBack: () => void }) {
             [
               ['zoom', ZoomIn, 'Zoom'],
               ['camera', Camera, 'Camera'],
+              ['hide', EyeOff, 'Hide'],
               ['audio', AudioLines, 'Audio'],
               ['style', Palette, 'Style'],
               ['trim', Scissors, 'Trim'],
@@ -380,6 +402,8 @@ export default function Editor({ onBack }: { onBack: () => void }) {
                 ? 'Smart zoom'
                 : tool === 'camera'
                 ? 'Camera & avatar'
+                : tool === 'hide'
+                ? 'Hide screen areas'
                 : tool === 'audio'
                 ? 'Audio studio'
                 : tool === 'trim'
@@ -527,6 +551,28 @@ export default function Editor({ onBack }: { onBack: () => void }) {
               </details>
             </>
           )}
+          {tool === 'hide' && (
+            <HideSettings
+              masks={p.edits.masks || []}
+              selected={selectedMask}
+              duration={p.duration}
+              onSelect={(id) => {
+                setSelectedMask(id);
+                const mask = p.edits.masks?.find((item) => item.id === id);
+                if (mask && (time < mask.start || time >= mask.end))
+                  setTime(mask.start);
+              }}
+              onAdd={addMask}
+              onChange={changeMask}
+              onRemove={(id) => {
+                edit((edits) => ({
+                  ...edits,
+                  masks: (edits.masks || []).filter((mask) => mask.id !== id),
+                }));
+                setSelectedMask('');
+              }}
+            />
+          )}
           {tool === 'camera' && (
             <>
               {!p.camera && !p.edits.avatar && (
@@ -662,8 +708,8 @@ export default function Editor({ onBack }: { onBack: () => void }) {
               <hr />
               <h3>Give your pauses purpose</h3>
               <p className="muted small">
-                Detect quiet regions locally. We leave 180ms at each edge to
-                protect words.
+                Shorten long pauses while keeping 400ms at each edge. Quiet
+                syllables and natural breaths are protected.
               </p>
               <Field label="Silence workflow">
                 <select value={mode} onChange={(e) => setMode(e.target.value)}>
@@ -683,7 +729,7 @@ export default function Editor({ onBack }: { onBack: () => void }) {
                 label="Minimum pause"
                 value={minimum}
                 min={0.5}
-                max={5}
+                max={30}
                 step={0.1}
                 suffix="s"
                 onChange={setMinimum}
@@ -725,18 +771,10 @@ export default function Editor({ onBack }: { onBack: () => void }) {
                   className="full"
                   disabled={!selectedSilence.length}
                   onClick={() =>
-                    edit((e) => ({
-                      ...e,
-                      cuts: mergeRanges(
-                        [
-                          ...e.cuts,
-                          ...e.silence.filter((_, i) =>
-                            selectedSilence.includes(i)
-                          ),
-                        ],
-                        e.trim
-                      ),
-                    }))
+                    edit((e) => updateSilenceSuggestions(
+                      e, e.silence,
+                      e.silence.filter((_, i) => selectedSilence.includes(i))
+                    ))
                   }
                 >
                   <Scissors size={14} /> Remove selected pauses
@@ -1016,6 +1054,7 @@ export default function Editor({ onBack }: { onBack: () => void }) {
                   edit((e) => ({
                     ...e,
                     cuts: [],
+                    automaticCuts: [],
                     splits: [],
                     trim: { start: 0, end: p.duration },
                   }))
@@ -1037,6 +1076,10 @@ export default function Editor({ onBack }: { onBack: () => void }) {
           setTime={setTime}
           tool={tool}
           selectedZoom={selected}
+          selectedMask={selectedMask}
+          onMask={addMask}
+          onMaskChange={changeMask}
+          onSelectMask={setSelectedMask}
           onFocus={(x, y) =>
             z ? changeZoom({ x, y }) : addZoom(zoomPreferences.scale, x, y)
           }

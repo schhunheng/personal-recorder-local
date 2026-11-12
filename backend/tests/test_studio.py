@@ -24,6 +24,44 @@ def test_silence_padding_and_non_destructive_timeline():
     assert silence_cuts([],30)==[]
 
 
+def test_hidden_area_validation_and_legacy_timelines():
+    from pydantic import ValidationError
+    assert EDL(source_duration=4,trim={'start':0,'end':4}).masks==[]
+    mask={'id':'secret','start':.6,'end':2.6,'x':.6,'y':.2,'width':.2,'height':.3,'color':'#000000'}
+    edl=EDL(source_duration=4,trim={'start':0,'end':4},masks=[mask])
+    assert EDL.model_validate_json(edl.model_dump_json()).masks[0].model_dump()==mask
+    for invalid in ({'width':0},{'x':.9},{'y':.9},{'color':'black@0.5'},{'end':5},{'start':3},{'width':float('nan')}):
+        with pytest.raises(ValidationError):
+            EDL(source_duration=4,trim={'start':0,'end':4},masks=[{**mask,**invalid}])
+
+
+@pytest.mark.skipif(not shutil.which('ffmpeg'),reason='FFmpeg required')
+def test_hidden_areas_follow_zoom_and_source_time_across_cuts_in_real_mp4(tmp_path):
+    source=tmp_path/'source.mp4'
+    subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','color=c=0xd33232:s=640x360:r=30,drawbox=x=320:y=0:w=320:h=360:c=0x20c6c6:t=fill','-f','lavfi','-i','sine=frequency=250:sample_rate=48000','-t','4','-c:v','libx264','-c:a','aac',str(source)],check=True)
+    original=source.read_bytes();pid=str(uuid4());config=Config(data_dir=tmp_path/'data')
+    edl=EDL(source_duration=4,trim={'start':.2,'end':3.7},cuts=[{'id':'cut','start':1,'end':1.8}],
+        masks=[{'id':'secret','start':.6,'end':2.6,'x':.6,'y':.2,'width':.2,'height':.3}],
+        zooms=[{'id':'zoom','time':0,'duration':.05,'scale':2,'x':.75,'y':.5}],
+        appearance={'padding':0,'radius':0,'shadow':False})
+    with TestClient(create_app(config)) as client:
+        client.post('/api/studio/projects',json={'id':pid,'title':'Hidden details','duration':4})
+        client.put(f'/api/studio/projects/{pid}/assets/screen',content=original,headers={'Content-Type':'video/mp4'})
+        job=client.post(f'/api/studio/projects/{pid}/process',json={'action':'render','edl':edl.model_dump(),'height':360,'noise':'off','normalize':False}).json()
+        done=wait(client,job['id']);assert done['status']=='completed',done
+        assert done['result']['edl']['masks']==edl.model_dump()['masks']
+        assert abs(done['result']['duration']-2.7)<.1
+        output=Path(done['result']['library_path'])
+        for time_at,hidden in ((.1,False),(.5,True),(1.1,True),(1.7,False)):
+            raw=subprocess.check_output(['ffmpeg','-v','error','-ss',str(time_at),'-i',str(output),'-vframes','1','-f','rawvideo','-pix_fmt','rgb24','pipe:1'])
+            def pixel(x,y): return raw[(y*640+x)*3:(y*640+x)*3+3]
+            covered=pixel(256,108);outside=pixel(448,288)
+            if hidden: assert max(covered)<20, (time_at,covered)
+            else: assert covered[1]>140 and covered[2]>140, (time_at,covered)
+            assert outside[1]>140 and outside[2]>140, (time_at,outside)
+        assert client.get(f'/api/studio/projects/{pid}/assets/screen').content==original
+
+
 def wait(client,id):
     deadline=time.monotonic()+120
     while time.monotonic()<deadline:

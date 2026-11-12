@@ -34,9 +34,16 @@ macOS may require Chrome permission in **Privacy & Security → Screen & System 
 4. Stop opens the existing editor at **Settings**. Choose your audio cleanup, editing preset, and export options, then click **Auto edit** to start. Opening or reloading an unprocessed recording never starts processing by itself. After your click, the automatic editor saves immutable originals to this Mac and submits a durable job. Real stage progress arrives through SSE; upload progress measures bytes. A disconnected progress stream reconnects to the same job rather than starting a replacement job.
 5. Follow **Settings → Process → Review → Download** in Automatic editor. Settings shows the available local speech models and audio source. Process shows actual worker stages and enables the original/cleaned audio comparison once cleanup finishes. Review the video and proposed cuts; **Apply reviewed cuts to timeline** keeps your other current edits. Changed cut choices require **Export reviewed video** before Download unlocks. Undo/redo preserves earlier edits. Manual edits made while a job runs are not automatically replaced by its finished draft.
 6. Change zoom, camera/avatar, trim, captions, style, and chapter labels in the editor. Style has independent **Horizontal padding** and **Vertical padding**, plus automatic background contrast or a custom watermark color. Source proportions are preserved. **Save timeline on Mac** stores the current EDL through the local API. **Export current timeline to MP4** renders your reviewed edits; **Auto edit** reanalyzes pauses.
+   Use **Hide** to draw opaque boxes over private screen details. Drag a box to move it or its bottom-right handle to resize it; the inspector also offers position, size, color, and start/end time controls. Areas default to the full trimmed recording, follow screen content through zooms, support undo/redo, and are saved with the project. Both browser exports and local MP4 renders include the covers. Original recordings remain available separately.
 7. Download MP4 directly, or return to **All projects → Original / Edited videos**. Outputs remain available after leaving the editor and reloading. Every successful local job keeps its own output; retries do not replace previous results.
 
 Keyboard shortcuts: Space plays/pauses the browser preview, S splits, ⌘Z/Ctrl+Z undoes, ⌘⇧Z/Ctrl+Shift+Z redoes. Shortcuts are limited to this tab. After stopping, choose New recording to record another lesson; each capture needs a fresh browser permission picker.
+
+## Upload a video with AI noise cancellation
+
+Choose **Upload video** (or **Upload a video** on the dashboard), select or drop a browser-playable MP4, MOV, WebM, OGV, or MKV, and leave **AI noise cancellation** enabled. Choose Light, Balanced, or Strong, then **Continue to editor → Remove noise**. The local service cleans the video's existing audio and creates an MP4 using the current timeline, without automatic cuts, zooms, or transcription. Review the original/cleaned audio comparison, then choose **Next: download video → Download MP4**. The original stays available separately; output uses the selected landscape or portrait export profile.
+
+Run `npm run dev:all` for local AI processing. The settings show available neural models and any basic-cleanup fallback. Importing a video and reopening its project never starts a processing job automatically. You can turn off AI cleanup during upload, or enable **Noise cancellation only** in any project's Automatic editor later.
 
 ## Presets and output profiles
 
@@ -52,7 +59,7 @@ Social selection is marker/rule-based, not semantic highlight recognition. It ne
 - **Facebook/TikTok:** 1080×1920, 9:16, 30 FPS by default.
 - H.264 video, AAC audio, high/standard quality, and adjustable maximum bitrate.
 - Vertical output fits the source without stretching it. Use editable zoom regions to make a chosen code area readable. Full desktop text may be too small in vertical framing; review before sharing.
-- Cuts use retained source-time ranges and short audio fades to avoid clicks. No crossfade obscures code.
+- Cuts use retained source-time ranges and short audio ramps to avoid clicks. Retained audio is assembled as continuous PCM and encoded to AAC once, avoiding repeated encoder delay at joins. Video frame rounding uses cumulative time to prevent drift across many cuts.
 
 ## Audio and speech detection
 
@@ -64,7 +71,7 @@ Choose Light, Balanced, or Strong. Balanced mixes 95% neural enhancement; Strong
 
 DeepFilterNet remains an optional adapter requiring installed Python dependencies and a local model directory (`EDU_DF_MODEL_DIR`). It is shown as unavailable when missing. Engine failures fall back with an explicit warning. No model is downloaded at processing time. Cleanup cannot reliably isolate one speaker from overlapping voices or remove all room echo. Compare speech as well as background sound before accepting a result.
 
-Silero VAD is used when its local package/model is installed. Without it, **Auto** uses labeled energy-based suggestions. Explicit Silero mode fails clearly if unavailable. Defaults detect gaps longer than 1.5 seconds and retain approximately 0.3 seconds around speech. Quiet Khmer syllables and useful coding pauses require review; these are reversible proposals, not guaranteed mistake detection. A fully quiet recording is never automatically cut to an empty file.
+Silero VAD is used when its local package/model is installed. Without it, **Auto** uses labeled energy-based suggestions. Explicit Silero mode fails clearly if unavailable. Defaults detect gaps longer than 1.8 seconds and retain approximately 0.4 seconds on each side of speech. Detection uses the original synchronized voice before noise suppression, with a lower-energy safety band for soft syllables. Tiny removals are skipped. Silero windows overlap so words crossing a processing boundary retain their context. Quiet Khmer syllables and useful coding pauses require review; these are reversible proposals, not guaranteed mistake detection. A fully quiet recording is never automatically cut to an empty file. Re-running Auto edit or updating applied pause suggestions replaces earlier automatic cuts while preserving manual edits; old exports stay available. Regenerate an existing edit to use these improvements.
 
 ## Optional offline Khmer/English captions
 
@@ -104,6 +111,7 @@ npm run build
 npm test
 npm run test:api
 npm run test:browser
+npm run test:upload-browser
 ```
 
 Current evidence:
@@ -112,7 +120,7 @@ Current evidence:
 - Real FastAPI/FFmpeg tests cover independent camera composition, padded silence removal/restoration, actual H.264/AAC codecs, A/V duration, output retention across retries/restarts, vertical output, SRT, SSE, optional-AI fallback, timeline conflicts, and immutable originals.
 - Your recovered 42-second lesson was processed into [a real 1080p MP4](Recordings/b3238abe-fd64-4cc6-85bc-cc781b880557/edit3-b3238abe-fd64-4cc6-85bc-cc781b880557.mp4). Its original checksum is unchanged. The optimized run took 13.68 seconds in this environment; it found no qualifying pauses, so it did not invent cuts. This single sample is not a general performance/quality guarantee.
 - [Sample verification report](Recordings/b3238abe-fd64-4cc6-85bc-cc781b880557/edit3-b3238abe-fd64-4cc6-85bc-cc781b880557.verification.json) includes settings, EDL, codecs/duration checks, warnings, hashes, and measured runtime. Historical input/output paths inside this report are recorded from the original run; use `migration.json` for their current locations.
-- Automated Chrome launch and localhost server binding remain blocked by this execution sandbox. The connected browser workflow, H390/webcam hardware sync, a real 30-minute recording, model quality, and full visual QA still require validation outside it.
+- Automated Chrome tests pass when run with permission to launch Chrome and bind a loopback test server. They verify recording fixtures, hidden-area drawing/movement/resizing, undo/redo, saved cover settings, actual covered pixels in browser MP4 exports, and responsive layout. Physical H390/webcam sync, a real 30-minute recording, model quality, and full visual QA still require validation.
 - Silero/faster-whisper model installation was attempted but could not resolve distributions in this environment. They are not installed or presented as verified AI features.
 
 See [architecture](docs/ARCHITECTURE.md), [automation plan](docs/AUTOMATION_PLAN.md), and [validation gates](docs/VALIDATION.md). This is an implemented, tested local processing engine with pending browser/hardware/model acceptance—not a claim that all phases are production verified.

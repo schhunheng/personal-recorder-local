@@ -18,7 +18,7 @@ const timelineURL = moduleURL(
   )
 );
 const { defaultEdits } = await import(modelURL);
-const { mergeRanges, segments, editedDuration, zoomAt, detectSilence } =
+const { mergeRanges, segments, editedDuration, zoomAt, detectSilence, updateSilenceSuggestions } =
   await import(timelineURL);
 test('overlapping cuts are merged, bounded, and preserve the original timeline', () => {
   const e = defaultEdits(30);
@@ -78,9 +78,35 @@ test('silence detection protects speech edges and keeps short natural pauses', (
   ];
   const result = detectSilence(levels, 0.1, -40, 1.2);
   assert.equal(result.length, 1);
-  assert.ok(Math.abs(result[0].start - 1.18) < 1e-6);
-  assert.ok(Math.abs(result[0].end - 3.82) < 1e-6);
+  assert.ok(Math.abs(result[0].start - 1.4) < 1e-6);
+  assert.ok(Math.abs(result[0].end - 3.6) < 1e-6);
   assert.deepEqual(detectSilence(Array(100).fill(0.2), 0.1, -40, 1), []);
+});
+test('quiet words interrupt silence suggestions and entirely quiet recordings stay intact', () => {
+  const levels = [
+    ...Array(10).fill(.1), ...Array(20).fill(.0001),
+    ...Array(4).fill(.004), ...Array(20).fill(.0001),
+    ...Array(10).fill(.1),
+  ];
+  const cuts = detectSilence(levels, .1, -38, 1.2);
+  assert.equal(cuts.length, 2);
+  for (const cut of cuts) assert.ok(cut.end <= 2.6 || cut.start >= 3.8);
+  assert.deepEqual(detectSilence(Array(100).fill(.0001), .1, -38, 1.2), []);
+  assert.deepEqual(detectSilence([], .1, -38, 1.2), []);
+  assert.deepEqual(detectSilence([.1, 0, .1], 0, -38, 1.2), []);
+});
+test('updating pause choices replaces old automatic cuts while preserving manual cuts and undo data', () => {
+  const edits = defaultEdits(20);
+  edits.cuts = [{ start: 2, end: 5 }, { start: 10, end: 11 }];
+  edits.silence = [{ start: 2, end: 5 }];
+  const before = structuredClone(edits);
+  const suggestions = [{ start: 2.4, end: 4.6 }];
+  const review = updateSilenceSuggestions(edits, suggestions);
+  assert.deepEqual(review.cuts, edits.cuts);
+  const applied = updateSilenceSuggestions(review, suggestions, suggestions);
+  assert.deepEqual(applied.cuts, [...suggestions, { start: 10, end: 11 }]);
+  assert.deepEqual(updateSilenceSuggestions(applied, suggestions, []).cuts, [{ start: 10, end: 11 }]);
+  assert.deepEqual(edits, before);
 });
 test('30-minute timeline calculations remain bounded with many edits', () => {
   const e = defaultEdits(1800);

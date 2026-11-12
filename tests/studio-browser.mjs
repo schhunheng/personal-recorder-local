@@ -2,6 +2,7 @@
 // Only physical screen/device acquisition is replaced with deterministic fixtures.
 import { chromium } from 'playwright-core';
 import { readFile, mkdir, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 const browser = await chromium.launch({
@@ -11,40 +12,48 @@ const browser = await chromium.launch({
   headless: true,
   args: ['--autoplay-policy=no-user-gesture-required'],
 });
-try {
-  const context = await browser.newContext({
-    viewport: { width: 1440, height: 1000 },
-    acceptDownloads: true,
-  });
-  await context.route('https://studio.test/**', async (route) => {
+// Serve real loopback HTTP so AudioWorklet modules use the browser's native loader.
+// Intercepted HTTPS fixtures can leave audioWorklet.addModule waiting indefinitely.
+const server = createServer(async (request, response) => {
+  try {
     const pathname = decodeURIComponent(
-      new URL(route.request().url()).pathname
+      new URL(request.url, 'http://127.0.0.1').pathname
     );
     const file = path.resolve(
       'dist',
       pathname === '/' ? 'index.html' : '.' + pathname
     );
-    if (!file.startsWith(path.resolve('dist') + path.sep)) return route.abort();
-    try {
-      const body = await readFile(file);
-      await route.fulfill({
-        body,
-        contentType: file.endsWith('.html')
-          ? 'text/html'
-          : file.endsWith('.css')
-          ? 'text/css'
-          : file.endsWith('.json')
-          ? 'application/json'
-          : 'text/javascript',
-      });
-    } catch {
-      await route.fulfill({ status: 404, body: 'Not found' });
-    }
+    if (!file.startsWith(path.resolve('dist') + path.sep))
+      throw Error('Invalid path');
+    const body = await readFile(file);
+    response.writeHead(200, {
+      'Content-Type': file.endsWith('.html')
+        ? 'text/html'
+        : file.endsWith('.css')
+        ? 'text/css'
+        : file.endsWith('.json')
+        ? 'application/json'
+        : 'text/javascript',
+    });
+    response.end(body);
+  } catch {
+    response.writeHead(404);
+    response.end('Not found');
+  }
+});
+try {
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const context = await browser.newContext({
+    viewport: { width: 1440, height: 1000 },
+    acceptDownloads: true,
   });
   const page = await context.newPage(),
     errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
-  await page.goto('https://studio.test/');
+  await page.goto(`http://127.0.0.1:${server.address().port}/`);
   await page
     .getByRole('heading', { name: 'Your next great lesson starts here.' })
     .waitFor();
@@ -196,6 +205,53 @@ try {
   });
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
   await page.getByRole('button', { name: 'Redo', exact: true }).click();
+  await page.getByRole('button', { name: 'Hide', exact: true }).click();
+  const maskPreview = page.getByLabel('Video preview. Draw, move, or resize hidden areas.', { exact: true });
+  const point = async ([x, y]) => {
+    const box = await maskPreview.boundingBox();
+    const size = await maskPreview.evaluate((canvas) => ({ width: canvas.width, height: canvas.height }));
+    const scale = Math.min(box.width / size.width, box.height / size.height);
+    return {
+      x: box.x + (box.width - size.width * scale) / 2 + x * size.width * scale,
+      y: box.y + (box.height - size.height * scale) / 2 + y * size.height * scale,
+    };
+  };
+  const drag = async (from, to) => {
+    const start = await point(from), end = await point(to);
+    await page.mouse.move(start.x, start.y);
+    await page.mouse.down();
+    await page.mouse.move(end.x, end.y, { steps: 8 });
+    await page.mouse.up();
+  };
+  await drag([0.18, 0.28], [0.36, 0.5]);
+  await page.getByRole('button', { name: /^Hidden area 1/ }).waitFor();
+  const areaLeft = page.getByRole('slider', { name: /^Area left/ });
+  const drawnLeft = +(await areaLeft.inputValue());
+  await drag([0.27, 0.39], [0.31, 0.43]);
+  assert.ok(+(await areaLeft.inputValue()) > drawnLeft, 'dragging a cover moves it');
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  assert.equal(+(await areaLeft.inputValue()), drawnLeft, 'one drag is one undo step');
+  await page.getByRole('button', { name: 'Redo', exact: true }).click();
+  const areaWidth = page.getByRole('slider', { name: /^Area width/ });
+  const previousWidth = +(await areaWidth.inputValue());
+  await drag([0.4, 0.54], [0.44, 0.58]);
+  assert.ok(+(await areaWidth.inputValue()) > previousWidth, 'the corner handle resizes a cover');
+  await areaWidth.fill('10');
+  await page.getByRole('slider', { name: /^Area height/ }).fill('10');
+  await areaLeft.fill('60');
+  await page.getByRole('slider', { name: /^Area top/ }).fill('40');
+  await page.getByLabel('Hide from (seconds)', { exact: true }).fill('0.5');
+  await page.getByLabel('Hide until (seconds)', { exact: true }).fill('3.2');
+  await page.getByRole('button', { name: 'Add hidden area', exact: true }).click();
+  await page.getByRole('button', { name: /^Hidden area 2/ }).waitFor();
+  await page.getByRole('button', { name: 'Remove hidden area', exact: true }).click();
+  assert.equal(await page.getByRole('button', { name: /^Hidden area 2/ }).count(), 0);
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  assert.equal(await page.getByRole('button', { name: /^Hidden area 2/ }).count(), 1);
+  await page.getByRole('button', { name: 'Redo', exact: true }).click();
+  assert.equal(await page.getByRole('button', { name: /^Hidden area 2/ }).count(), 0);
+  await page.getByRole('button', { name: /^Hidden area 1/ }).click();
+  await page.screenshot({ path: '/tmp/reancode101-tests/hide-editor.png', fullPage: true });
   await page.getByRole('button', { name: 'Trim', exact: true }).click();
   await page.getByLabel('Trim start (seconds)').fill('0.3');
   await page.getByLabel('Trim end (seconds)').fill('3.5');
@@ -262,7 +318,7 @@ try {
       v.onloadeddata = resolve;
       v.onerror = reject;
     });
-    v.currentTime = 1.7;
+    v.currentTime = 1;
     await new Promise((resolve) => (v.onseeked = resolve));
     const c = document.createElement('canvas');
     c.width = v.videoWidth;
@@ -278,6 +334,14 @@ try {
           1
         ).data,
       ];
+    const mask = p.edits.masks[0], pad = Math.min(c.width, c.height) * p.edits.appearance.padding,
+      scale = Math.min((c.width - pad * 2) / p.width, (c.height - pad * 2) / p.height),
+      bw = p.width * scale, bh = p.height * scale,
+      covered = [...ctx.getImageData(
+        (c.width - bw) / 2 + ((mask.x + mask.width / 2 - 0.75) * 2 + 0.5) * bw,
+        (c.height - bh) / 2 + ((mask.y + mask.height / 2 - 0.5) * 2 + 0.5) * bh,
+        1, 1
+      ).data];
     const header = new TextDecoder().decode(
       await blob.slice(4, 8).arrayBuffer()
     );
@@ -298,6 +362,8 @@ try {
       audioDuration,
       center,
       camera,
+      covered,
+      masks: p.edits.masks,
       header,
       width: v.videoWidth,
       height: v.videoHeight,
@@ -314,6 +380,8 @@ try {
     'trim and split removal must be represented in exported duration'
   );
   assert.ok(verification.bytes > 10000);
+  assert.ok(verification.covered.slice(0, 3).every((channel) => channel < 25), 'exported pixels must hide the selected screen area');
+  assert.equal(verification.masks.length, 1);
   assert.ok(
     verification.center[1] > 140 &&
       verification.center[2] > 140 &&
@@ -335,6 +403,13 @@ try {
   await page
     .getByRole('button', { name: 'Python · integration fixture', exact: true })
     .waitFor();
+  await page.getByRole('button', { name: 'Python · integration fixture', exact: true }).click();
+  await page.getByRole('button', { name: 'Hide', exact: true }).click();
+  await page.getByRole('button', { name: /^Hidden area 1/ }).click();
+  assert.equal(await page.getByRole('slider', { name: /^Area left/ }).inputValue(), '60');
+  assert.equal(await page.getByLabel('Hide from (seconds)', { exact: true }).inputValue(), '0.5');
+  assert.equal(await page.getByLabel('Hide until (seconds)', { exact: true }).inputValue(), '3.2');
+  await page.getByRole('button', { name: 'Back to projects', exact: true }).click();
   // Regression: leaving the editor and reloading must retain both video files.
   await page.getByRole('button', { name: 'Original', exact: true }).click();
   await page
@@ -382,9 +457,14 @@ try {
     JSON.stringify(verification, null, 2)
   );
   console.log(
-    'Capture, pause/resume, storage restore, zoom, separate webcam, local export and responsive checks passed.',
+    'Capture, pause/resume, storage restore, zoom, hidden-area editing and export pixels, separate webcam, local export and responsive checks passed.',
     verification
   );
+} catch (error) {
+  const page = browser.contexts()[0]?.pages()[0];
+  await page?.screenshot({ path: '/tmp/reancode101-tests/failure.png', fullPage: true });
+  throw error;
 } finally {
   await browser.close();
+  await new Promise((resolve) => server.close(resolve));
 }

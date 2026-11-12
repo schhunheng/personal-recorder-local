@@ -21,7 +21,7 @@ def retained(edl: EDL):
 def duration(edl):
     return sum(r['end'] - r['start'] for r in retained(edl))
 
-def silence_cuts(speech, length, minimum=1.5, padding=.3):
+def silence_cuts(speech, length, minimum=1.8, padding=.4):
     speech = merged(speech, 0, length)
     if not speech: return []  # Never silently remove an entirely quiet lesson.
     result, end = [], 0
@@ -29,7 +29,8 @@ def silence_cuts(speech, length, minimum=1.5, padding=.3):
         if region['start'] - end >= minimum:
             start = end + (padding if end > 0 else 0)
             finish = region['start'] - (padding if region['start'] < length else 0)
-            if finish - start > .05:
+            # Tiny removals create jumps without meaningfully shortening a pause.
+            if finish - start >= .35:
                 result.append(Cut(id=str(uuid4()), start=start, end=finish, reason='silence'))
         end = max(end, region['end'])
     return result

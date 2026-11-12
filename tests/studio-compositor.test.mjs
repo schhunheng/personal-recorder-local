@@ -11,6 +11,7 @@ const url = (source) =>
     })
   ).toString('base64');
 const modelURL = url(await readFile('src/studio/model.ts', 'utf8')),
+  masksURL = url((await readFile('src/studio/masks.ts', 'utf8')).replace("'./model'", JSON.stringify(modelURL))),
   timelineURL = url(
     (await readFile('src/studio/timeline.ts', 'utf8')).replace(
       "'./model'",
@@ -21,7 +22,7 @@ const compositorURL = url(
   (await readFile('src/studio/compositor.ts', 'utf8')).replace(
     "'./timeline'",
     JSON.stringify(timelineURL)
-  )
+  ).replace("'./masks'", JSON.stringify(masksURL))
 );
 const { defaultEdits } = await import(modelURL),
   { drawFrame, screenBounds, contrastColor, watermarkColor } = await import(
@@ -138,4 +139,30 @@ test('watermark contrast follows the background and custom colors reach the rend
   assert.ok(
     ctx.calls.some((c) => c[0] === 'strokeText' && c[1] === 'REANCODE101')
   );
+});
+
+test('hidden areas cover source pixels through zoom and padding only during their source-time interval', () => {
+  const edits = defaultEdits(10),
+    screen = { videoWidth: 2000, videoHeight: 1000, readyState: 4 },
+    camera = { videoWidth: 480, videoHeight: 480, readyState: 4 };
+  edits.zooms = [{ id: 'z', time: 0, duration: 0.1, scale: 2, x: 0.75, y: 0.5 }];
+  edits.masks = [{ id: 'secret', x: 0.6, y: 0.3, width: 0.2, height: 0.1, color: '#123456', start: 1, end: 3 }];
+  for (const [width, height] of [[1920, 1080], [1080, 1920], [1080, 1080]]) {
+    const b = screenBounds(screen, edits, width, height), ctx = context();
+    drawFrame(ctx, screen, camera, edits, 2, width, height);
+    const fillIndex = ctx.calls.findIndex((c) => c[0] === 'fillStyle' && c[1] === '#123456');
+    assert.ok(fillIndex > ctx.calls.findIndex((c) => c[0] === 'drawImage'));
+    assert.deepEqual(ctx.calls[fillIndex + 1], ['fillRect', b.x + ((0.6 - 0.75) * 2 + 0.5) * b.w, b.y + ((0.3 - 0.5) * 2 + 0.5) * b.h, 0.4 * b.w, 0.2 * b.h]);
+    assert.ok(fillIndex < ctx.calls.findIndex((c) => c[0] === 'drawImage' && c[1] === camera));
+  }
+  for (const time of [0, 0.999, 3, 4]) {
+    const ctx = context();
+    drawFrame(ctx, screen, undefined, edits, time, 1920, 1080);
+    assert.ok(!ctx.calls.some((c) => c[0] === 'fillStyle' && c[1] === '#123456'));
+  }
+  const start = context();
+  drawFrame(start, screen, undefined, edits, 1, 1920, 1080);
+  assert.ok(start.calls.some((c) => c[0] === 'fillStyle' && c[1] === '#123456'));
+  delete edits.masks;
+  assert.doesNotThrow(() => drawFrame(context(), screen, undefined, edits, 2, 1920, 1080));
 });

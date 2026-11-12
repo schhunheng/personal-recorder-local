@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { cloneElement, isValidElement, useId, type ReactNode } from 'react';
 export function Toggle({
   label,
   checked,
@@ -46,8 +46,9 @@ export function Slider({
   step?: number;
   suffix?: string;
 }) {
+  const id = useId();
   return (
-    <label className="slider-field">
+    <label className="slider-field" htmlFor={id}>
       <span>
         {label}
         <output>
@@ -56,6 +57,7 @@ export function Slider({
         </output>
       </span>
       <input
+        id={id}
         type="range"
         min={min}
         max={max}
@@ -73,10 +75,19 @@ export function Field({
   label: string;
   children: ReactNode;
 }) {
+  const generatedId = useId();
+  const control = isValidElement<{ id?: string; 'aria-labelledby'?: string }>(children)
+    ? children
+    : undefined;
+  const id = control?.props.id || generatedId;
+  const labelId = `${id}-label`;
   return (
-    <label className="field">
-      <span>{label}</span>
-      {children}
+    <label className="field" htmlFor={control ? id : undefined}>
+      <span id={labelId}>{label}</span>
+      {control ? cloneElement(control, {
+        id,
+        'aria-labelledby': control.props['aria-labelledby'] || labelId,
+      }) : children}
     </label>
   );
 }

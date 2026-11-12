@@ -1,5 +1,6 @@
 import type { Edits } from './model';
 import { zoomAt } from './timeline';
+import { maskPixels } from './masks';
 export function contrastColor(background: string) {
   const hex = /^#[0-9a-f]{6}$/i.test(background) ? background : '#182b29';
   const channels = [1, 3, 5].map((index) => {
@@ -77,6 +78,17 @@ export function drawFrame(
       w,
       h
     );
+    for (const mask of edits.masks || []) {
+      if (time < mask.start || time >= mask.end) continue;
+      const rect = maskPixels(mask, video.videoWidth, video.videoHeight);
+      ctx.fillStyle = mask.color;
+      ctx.fillRect(
+        x + ((rect.x / video.videoWidth - z.x) * z.scale + 0.5) * w,
+        y + ((rect.y / video.videoHeight - z.y) * z.scale + 0.5) * h,
+        (rect.width / video.videoWidth) * z.scale * w,
+        (rect.height / video.videoHeight) * z.scale * h
+      );
+    }
     ctx.restore();
   }
   const c = edits.camera;
